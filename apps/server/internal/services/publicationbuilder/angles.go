@@ -106,7 +106,7 @@ func (service *Service) PlanAngles(ctx context.Context, input AngleInput) ([]Ang
 		SystemPrompt:    anglePlannerSystemPrompt,
 		UserPrompt:      prompt,
 		ResponseSchema:  anglePlanResponseSchema(),
-		MaxOutputTokens: 3_000,
+		MaxOutputTokens: 6000,
 		ReasoningEffort: ai.ReasoningEffortMedium,
 		Parts:           input.Parts, Images: input.Images, Files: input.Files, Audio: input.Audio, Videos: input.Videos,
 	}, func(result *anglePlanResult) error {

@@ -25,17 +25,19 @@ const (
 )
 
 type Config struct {
-	Model        string
-	Timeout      time.Duration
-	SourceLoader sourcecontext.Loader
+	Model            string
+	Timeout          time.Duration
+	SourceLoader     sourcecontext.Loader
+	DisableWebSearch bool
 }
 
 type Service struct {
-	generator ai.Generator
-	model     string
-	timeout   time.Duration
-	now       func() time.Time
-	sources   sourcecontext.Loader
+	generator        ai.Generator
+	model            string
+	timeout          time.Duration
+	now              func() time.Time
+	sources          sourcecontext.Loader
+	disableWebSearch bool
 }
 
 type citationLoad struct {
@@ -65,11 +67,12 @@ func New(generator ai.Generator, config Config) (*Service, error) {
 		timeout = defaultTimeout
 	}
 	return &Service{
-		generator: generator,
-		model:     model,
-		timeout:   timeout,
-		now:       func() time.Time { return time.Now().UTC() },
-		sources:   config.SourceLoader,
+		generator:        generator,
+		model:            model,
+		timeout:          timeout,
+		now:              func() time.Time { return time.Now().UTC() },
+		sources:          config.SourceLoader,
+		disableWebSearch: config.DisableWebSearch,
 	}, nil
 }
 
@@ -89,21 +92,28 @@ func (service *Service) Discover(ctx context.Context, input Input) (Result, erro
 
 	requestCtx, cancel := context.WithTimeout(ctx, service.timeout)
 	defer cancel()
+	requireSources := !service.disableWebSearch
+	systemPrompt := discoverySystemPrompt
+	webSearch := ai.WebSearchConfig{
+		Enabled:                true,
+		MaxResults:             webSearchMaxResults,
+		MaxUses:                webSearchMaxUses,
+		MaxTotalResults:        webSearchMaxTotalResults,
+		MaxCharactersPerResult: webSearchMaxCharacters,
+		Context:                ai.WebSearchContextLow,
+	}
+	if !requireSources {
+		systemPrompt = discoverySystemPromptNoSearch
+		webSearch = ai.WebSearchConfig{}
+	}
 	generated, err := service.generator.Generate(requestCtx, ai.GenerateRequest{
 		Model:           service.model,
-		SystemPrompt:    discoverySystemPrompt,
+		SystemPrompt:    systemPrompt,
 		UserPrompt:      prompt,
-		ResponseSchema:  discoveryResponseSchema(normalized),
+		ResponseSchema:  discoveryResponseSchema(normalized, requireSources),
 		MaxOutputTokens: maxOutputTokens,
 		ReasoningEffort: ai.ReasoningEffortMedium,
-		WebSearch: ai.WebSearchConfig{
-			Enabled:                true,
-			MaxResults:             webSearchMaxResults,
-			MaxUses:                webSearchMaxUses,
-			MaxTotalResults:        webSearchMaxTotalResults,
-			MaxCharactersPerResult: webSearchMaxCharacters,
-			Context:                ai.WebSearchContextLow,
-		},
+		WebSearch:       webSearch,
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("discover publication opportunities: %w", err)
@@ -113,12 +123,14 @@ func (service *Service) Discover(ctx context.Context, input Input) (Result, erro
 	if err := decodeStrictOutput(generated.Text, &output); err != nil {
 		return Result{}, fmt.Errorf("%w: structured response was rejected", ErrInvalidOutput)
 	}
-	opportunities, err := validateAndNormalizeOutput(output, normalized, now)
+	opportunities, err := validateAndNormalizeOutput(output, normalized, now, requireSources)
 	if err != nil {
 		return Result{}, err
 	}
-	if err := service.loadCitationSources(requestCtx, opportunities); err != nil {
-		return Result{}, err
+	if requireSources {
+		if err := service.loadCitationSources(requestCtx, opportunities); err != nil {
+			return Result{}, err
+		}
 	}
 	model := strings.TrimSpace(generated.Model)
 	if model == "" {

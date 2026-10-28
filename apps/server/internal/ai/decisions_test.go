@@ -69,3 +69,55 @@ func TestOpenRouterDecisionDoesNotRetryAnUncertainResponse(t *testing.T) {
 	require.NotContains(t, err.Error(), "private provider detail")
 	require.Equal(t, 1, calls)
 }
+
+type staticGenerator struct {
+	result  GenerateResult
+	err     error
+	request GenerateRequest
+}
+
+func (g *staticGenerator) Generate(_ context.Context, request GenerateRequest) (GenerateResult, error) {
+	g.request = request
+	return g.result, g.err
+}
+
+func TestGenerationDeciderUsesStrictBinaryAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		answer      string
+		probability float64
+		wantError   bool
+	}{
+		{"matched", `{"matched":true}`, 1, false},
+		{"not matched", `{"matched":false}`, 0, false},
+		{"missing", `{"answer":true}`, 0, true},
+		{"invalid json", `not-json`, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			generator := &staticGenerator{result: GenerateResult{
+				Text:      tc.answer,
+				Model:     "gpt-6-luna",
+				RequestID: "decision-request",
+				Usage:     Usage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12},
+			}}
+			decider := NewGenerationDecider(generator)
+			result, err := decider.Decide(context.Background(), DecisionRequest{
+				Model:    "gpt-6-luna",
+				Input:    "The deployment is healthy.",
+				Criteria: "Does the state report a failure?",
+			})
+			if tc.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.probability, result.Probability)
+			require.Equal(t, "gpt-6-luna", result.Model)
+			require.Equal(t, "decision-request", result.RequestID)
+			require.Equal(t, int64(12), result.Usage.TotalTokens)
+			require.Equal(t, "gpt-6-luna", generator.request.Model)
+			require.NotNil(t, generator.request.ResponseSchema)
+			require.Contains(t, generator.request.SystemPrompt, "Does the state report a failure?")
+		})
+	}
+}

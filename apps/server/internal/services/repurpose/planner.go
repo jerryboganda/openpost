@@ -118,7 +118,7 @@ func (service *Service) plan(ctx context.Context, request SuggestionRequest, ide
 	if err != nil {
 		return nil, ai.GenerateResult{}, err
 	}
-	result, err := service.usage.Generate(ctx, identity, service.generator, ai.GenerateRequest{Model: service.model, SystemPrompt: selectionPrompt, UserPrompt: string(payload), ResponseSchema: candidateSchema(), MaxOutputTokens: 2200, ReasoningEffort: ai.ReasoningEffortLow})
+	result, err := service.usage.Generate(ctx, identity, service.generator, ai.GenerateRequest{Model: service.model, SystemPrompt: selectionPrompt, UserPrompt: string(payload), ResponseSchema: candidateSchema(), MaxOutputTokens: 5000, ReasoningEffort: ai.ReasoningEffortLow})
 	if err != nil {
 		return nil, result, err
 	}

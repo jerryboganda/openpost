@@ -38,8 +38,9 @@ func TestContentOpenRouterRetriesPastLegacyFiveSecondBudget(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	_, contentConfig := openRouterConfigs(&config.Config{
-		OpenRouterAPIKey:    "test-key",
+	_, contentConfig := aiProviderConfigs(&config.Config{
+		AIProvider:          config.AIProviderOpenRouter,
+		AIAPIKey:            "test-key",
 		ContentAIProvider:   "azure/eu",
 		ContentAIRequireZDR: true,
 	})
@@ -58,4 +59,24 @@ func TestContentOpenRouterRetriesPastLegacyFiveSecondBudget(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "recovered", result.Text)
 	require.Greater(t, requests.Load(), int32(1))
+}
+
+func TestAIProviderConfigsUsesOpenCodeCompatibleMode(t *testing.T) {
+	_, content := aiProviderConfigs(&config.Config{
+		AIProvider:         config.AIProviderOpenCode,
+		AIAPIKey:           "oc_sk_test",
+		AIStructuredOutput: true,
+		AIWebSearch:        false,
+		AIReasoningEffort:  "max",
+		AISessionID:        "ses_test",
+	})
+
+	require.Equal(t, ai.ProviderModeOpenAICompatible, content.Mode)
+	require.Equal(t, "OpenCode", content.ProviderLabel)
+	require.Equal(t, "https://opencode.ai/inference/openai/v1", content.BaseURL)
+	require.Equal(t, "oc_sk_test", content.APIKey)
+	require.False(t, content.DisableStructuredOutput)
+	require.True(t, content.DisableWebSearch)
+	require.Equal(t, "max", content.ReasoningEffortOverride)
+	require.Equal(t, map[string]string{"x-opencode-session": "ses_test"}, content.Headers)
 }

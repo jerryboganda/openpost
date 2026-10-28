@@ -31,6 +31,18 @@ type MastodonServerConfig struct {
 // not a secret.
 const defaultDiagnosticsReceiverURL = "https://app.openpo.st/api/v1/diagnostics/ingest"
 
+const (
+	AIProviderOpenRouter = "openrouter"
+	AIProviderOpenCode   = "opencode"
+	AIProviderOpenAI     = "openai"
+)
+
+const (
+	defaultOpenRouterBaseURL = "https://openrouter.ai/api/v1"
+	defaultOpenCodeBaseURL   = "https://opencode.ai/inference/openai/v1"
+	defaultOpenAIBaseURL     = "https://api.openai.com/v1"
+)
+
 type Config struct {
 	Edition                  string
 	AppE2EHostedSignup       bool
@@ -65,6 +77,16 @@ type Config struct {
 	PrivacyVersion           string
 	SupportEmail             string
 	OpenRouterAPIKey         string
+	AIProvider               string
+	aiProviderInvalid        string
+	AIBaseURL                string
+	AIAPIKey                 string
+	OpenCodeAPIKey           string
+	OpenAIAPIKey             string
+	AIStructuredOutput       bool
+	AIWebSearch              bool
+	AIReasoningEffort        string
+	AISessionID              string
 	FalAPIKey                string
 	ContentAIProvider        string
 	ContentAIRequireZDR      bool
@@ -72,6 +94,11 @@ type Config struct {
 	ImageCaptionProvider     string
 	ImageCaptionRequireZDR   bool
 	TextGenerationModel      string
+	PostBuilderModel         string
+	PublicationBuilderModel  string
+	IdeateModel              string
+	RepurposeModel           string
+	WorkflowTextModel        string
 	EditorAgentModel         string
 	WorkflowDecisionModel    string
 	MemeGeneratorEnabled     bool
@@ -241,8 +268,12 @@ func Load() *Config {
 		defaultSupportEmail = "hello@openpo.st"
 	}
 
+	aiProviderRaw := strings.TrimSpace(getEnvDefault("OPENPOST_AI_PROVIDER", ""))
+	aiProvider := normalizeAIProvider(aiProviderRaw)
+
 	cfg := &Config{
 		Edition:                 edition,
+		aiProviderInvalid:       invalidAIProvider(aiProviderRaw),
 		Port:                    getEnvWithFallbacks("OPENPOST_PORT", "8080"),
 		DatabaseDriver:          getEnvEnum("OPENPOST_DATABASE_DRIVER", DatabaseDriverSQLite, DatabaseDriverSQLite, DatabaseDriverPostgres),
 		DatabasePath:            getEnvWithFallbacks("OPENPOST_DATABASE_PATH", "file:openpost.db?cache=shared&mode=rwc", "OPENPOST_DB_PATH"),
@@ -266,17 +297,31 @@ func Load() *Config {
 		PrivacyVersion:          getEnvDefault("OPENPOST_PRIVACY_VERSION", defaultPrivacyVersion),
 		SupportEmail:            getEnvDefault("OPENPOST_SUPPORT_EMAIL", defaultSupportEmail),
 		OpenRouterAPIKey:        strings.TrimSpace(getEnvDefault("OPENROUTER_API_KEY", "")),
+		AIProvider:              aiProvider,
+		AIBaseURL:               strings.TrimRight(strings.TrimSpace(getEnvDefault("OPENPOST_AI_BASE_URL", "")), "/"),
+		AIAPIKey:                strings.TrimSpace(getEnvDefault("OPENPOST_AI_API_KEY", "")),
+		OpenCodeAPIKey:          strings.TrimSpace(getEnvDefault("OPENCODE_API_KEY", "")),
+		OpenAIAPIKey:            strings.TrimSpace(getEnvDefault("OPENAI_API_KEY", "")),
+		AIStructuredOutput:      getEnvBoolWithAliases(true, "OPENPOST_AI_STRUCTURED_OUTPUT"),
+		AIWebSearch:             getEnvBoolWithAliases(true, "OPENPOST_AI_WEB_SEARCH"),
+		AIReasoningEffort:       getEnvEnum("OPENPOST_AI_REASONING_EFFORT", "auto", "auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"),
+		AISessionID:             strings.TrimSpace(getEnvDefault("OPENPOST_AI_SESSION_ID", "")),
 		FalAPIKey:               strings.TrimSpace(getEnvDefault("FAL_KEY", "")),
 		ContentAIProvider:       strings.TrimSpace(getEnvWithFallbacks("OPENPOST_CONTENT_AI_PROVIDER", "", "OPENPOST_IMAGE_CAPTION_PROVIDER")),
 		ContentAIRequireZDR:     getEnvBoolWithAliases(false, "OPENPOST_CONTENT_AI_REQUIRE_ZDR", "OPENPOST_IMAGE_CAPTION_REQUIRE_ZDR"),
-		ImageCaptionModel:       strings.TrimSpace(getEnvDefault("OPENPOST_IMAGE_CAPTION_MODEL", "openai/gpt-6-luna")),
+		ImageCaptionModel:       strings.TrimSpace(getEnvDefault("OPENPOST_IMAGE_CAPTION_MODEL", "")),
 		ImageCaptionProvider:    strings.TrimSpace(getEnvDefault("OPENPOST_IMAGE_CAPTION_PROVIDER", "")),
 		ImageCaptionRequireZDR:  getEnvBoolWithAliases(false, "OPENPOST_IMAGE_CAPTION_REQUIRE_ZDR"),
-		WorkflowDecisionModel:   strings.TrimSpace(getEnvDefault("OPENPOST_WORKFLOW_DECISION_MODEL", "typesafe/jev-1.13")),
-		TextGenerationModel:     strings.TrimSpace(getEnvDefault("OPENPOST_TEXT_GENERATION_MODEL", "openai/gpt-6-luna")),
-		EditorAgentModel:        strings.TrimSpace(getEnvDefault("OPENPOST_EDITOR_AGENT_MODEL", "google/gemini-3.8-flash")),
+		WorkflowDecisionModel:   strings.TrimSpace(getEnvDefault("OPENPOST_WORKFLOW_DECISION_MODEL", "")),
+		TextGenerationModel:     strings.TrimSpace(getEnvDefault("OPENPOST_TEXT_GENERATION_MODEL", "")),
+		PostBuilderModel:        strings.TrimSpace(getEnvDefault("OPENPOST_POST_BUILDER_MODEL", "")),
+		PublicationBuilderModel: strings.TrimSpace(getEnvDefault("OPENPOST_PUBLICATION_BUILDER_MODEL", "")),
+		IdeateModel:             strings.TrimSpace(getEnvDefault("OPENPOST_IDEATE_MODEL", "")),
+		RepurposeModel:          strings.TrimSpace(getEnvDefault("OPENPOST_REPURPOSE_MODEL", "")),
+		WorkflowTextModel:       strings.TrimSpace(getEnvDefault("OPENPOST_WORKFLOW_TEXT_MODEL", "")),
+		EditorAgentModel:        strings.TrimSpace(getEnvDefault("OPENPOST_EDITOR_AGENT_MODEL", "")),
 		MemeGeneratorEnabled:    getEnvBoolWithAliases(true, "OPENPOST_MEME_GENERATOR_ENABLED"),
-		MemeGenerationModel:     strings.TrimSpace(getEnvDefault("OPENPOST_MEME_GENERATION_MODEL", "openai/gpt-6-luna")),
+		MemeGenerationModel:     strings.TrimSpace(getEnvDefault("OPENPOST_MEME_GENERATION_MODEL", "")),
 		ImageEditorEnabled: getEnvBoolWithAliases(
 			true,
 			"OPENPOST_IMAGE_EDITOR_ENABLED",
@@ -868,7 +913,7 @@ func (c *Config) missingCloudTelemetryConfig() []string {
 }
 
 func (c *Config) invalidCloudImageCaptionConfig() []string {
-	if strings.TrimSpace(c.OpenRouterAPIKey) == "" {
+	if strings.TrimSpace(c.effectiveAIAPIKey()) == "" {
 		return nil
 	}
 	var invalid []string
@@ -882,7 +927,7 @@ func (c *Config) invalidCloudImageCaptionConfig() []string {
 }
 
 func (c *Config) invalidCloudContentAIConfig() []string {
-	if strings.TrimSpace(c.OpenRouterAPIKey) == "" {
+	if strings.TrimSpace(c.effectiveAIAPIKey()) == "" {
 		return nil
 	}
 	var invalid []string
@@ -899,8 +944,28 @@ func (c *Config) ValidateManagedSettings() error {
 	if c.Edition == EditionCloud && strings.TrimSpace(c.ConnectorsFile) != "" {
 		return fmt.Errorf("operator-installed connectors are limited to self-hosted deployments")
 	}
+	if err := c.validateAIProvider(); err != nil {
+		return err
+	}
 	if invalid := c.invalidAuthenticationConfig(); len(invalid) > 0 {
 		return fmt.Errorf("invalid authentication configuration: %s", strings.Join(invalid, ", "))
+	}
+	return nil
+}
+
+func (c *Config) validateAIProvider() error {
+	if c.aiProviderInvalid != "" {
+		return fmt.Errorf("OPENPOST_AI_PROVIDER must be one of %s, %s, or %s", AIProviderOpenRouter, AIProviderOpenCode, AIProviderOpenAI)
+	}
+	provider := normalizeAIProvider(c.AIProvider)
+	if c.Edition == EditionCloud && provider != AIProviderOpenRouter {
+		return fmt.Errorf("OPENPOST_AI_PROVIDER=%s is limited to self-hosted deployments", provider)
+	}
+	if baseURL := strings.TrimSpace(c.AIBaseURL); baseURL != "" {
+		parsed, err := url.Parse(baseURL)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
+			return fmt.Errorf("OPENPOST_AI_BASE_URL must be an absolute HTTP or HTTPS URL without credentials")
+		}
 	}
 	return nil
 }
@@ -1153,6 +1218,192 @@ func isEnvSet(key string) bool {
 		return true
 	}
 	return false
+}
+
+func normalizeAIProvider(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", AIProviderOpenRouter:
+		return AIProviderOpenRouter
+	case AIProviderOpenCode, "opencode-sdk", "opencode-console":
+		return AIProviderOpenCode
+	case AIProviderOpenAI, "openai-compatible", "compatible", "custom":
+		return AIProviderOpenAI
+	default:
+		log.Printf("WARNING: invalid value for OPENPOST_AI_PROVIDER=%q, using default %q", value, AIProviderOpenRouter)
+		return AIProviderOpenRouter
+	}
+}
+
+func invalidAIProvider(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", AIProviderOpenRouter, AIProviderOpenCode, "opencode-sdk", "opencode-console",
+		AIProviderOpenAI, "openai-compatible", "compatible", "custom":
+		return ""
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
+// EffectiveAIAPIKey resolves the explicit generic key first, then the
+// provider-specific environment key. This keeps provider changes in Settings
+// from reusing a key for the wrong provider.
+func (c *Config) EffectiveAIAPIKey() string {
+	if c == nil {
+		return ""
+	}
+	if value := strings.TrimSpace(c.AIAPIKey); value != "" {
+		return value
+	}
+	switch normalizeAIProvider(c.AIProvider) {
+	case AIProviderOpenCode:
+		return strings.TrimSpace(c.OpenCodeAPIKey)
+	case AIProviderOpenAI:
+		return strings.TrimSpace(c.OpenAIAPIKey)
+	default:
+		return strings.TrimSpace(c.OpenRouterAPIKey)
+	}
+}
+
+func defaultAIBaseURL(provider string) string {
+	switch provider {
+	case AIProviderOpenCode:
+		return defaultOpenCodeBaseURL
+	case AIProviderOpenAI:
+		return defaultOpenAIBaseURL
+	default:
+		return defaultOpenRouterBaseURL
+	}
+}
+
+func defaultAITextModel(provider string) string {
+	switch provider {
+	case AIProviderOpenCode:
+		return "gpt-6-luna"
+	case AIProviderOpenAI:
+		return "gpt-4o-mini"
+	default:
+		return "openai/gpt-6-luna"
+	}
+}
+
+func defaultAIDecisionModel(provider string) string {
+	switch provider {
+	case AIProviderOpenCode:
+		return "gpt-6-luna"
+	case AIProviderOpenAI:
+		return "gpt-4o-mini"
+	default:
+		return "typesafe/jev-1.13"
+	}
+}
+
+func defaultAIEditorModel(provider string) string {
+	switch provider {
+	case AIProviderOpenCode:
+		return "gpt-6-luna"
+	case AIProviderOpenAI:
+		return "gpt-4o-mini"
+	default:
+		return "google/gemini-3.8-flash"
+	}
+}
+
+func firstConfiguredModel(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+// Effective*Model methods resolve provider-aware defaults at use time, so
+// changing the provider in Settings also changes unset model defaults.
+
+func (c *Config) EffectiveTextGenerationModel() string {
+	if c == nil {
+		return ""
+	}
+	return firstConfiguredModel(c.TextGenerationModel, defaultAITextModel(normalizeAIProvider(c.AIProvider)))
+}
+
+func (c *Config) EffectivePostBuilderModel() string {
+	if c == nil {
+		return ""
+	}
+	return firstConfiguredModel(c.PostBuilderModel, c.EffectiveTextGenerationModel())
+}
+
+func (c *Config) EffectivePublicationBuilderModel() string {
+	if c == nil {
+		return ""
+	}
+	return firstConfiguredModel(c.PublicationBuilderModel, c.EffectiveTextGenerationModel())
+}
+
+func (c *Config) EffectiveIdeateModel() string {
+	if c == nil {
+		return ""
+	}
+	return firstConfiguredModel(c.IdeateModel, c.EffectiveTextGenerationModel())
+}
+
+func (c *Config) EffectiveRepurposeModel() string {
+	if c == nil {
+		return ""
+	}
+	return firstConfiguredModel(c.RepurposeModel, c.EffectiveTextGenerationModel())
+}
+
+func (c *Config) EffectiveWorkflowTextModel() string {
+	if c == nil {
+		return ""
+	}
+	return firstConfiguredModel(c.WorkflowTextModel, c.EffectiveTextGenerationModel())
+}
+
+func (c *Config) EffectiveImageCaptionModel() string {
+	if c == nil {
+		return ""
+	}
+	return firstConfiguredModel(c.ImageCaptionModel, c.EffectiveTextGenerationModel())
+}
+
+func (c *Config) EffectiveMemeGenerationModel() string {
+	if c == nil {
+		return ""
+	}
+	return firstConfiguredModel(c.MemeGenerationModel, c.EffectiveTextGenerationModel())
+}
+
+func (c *Config) EffectiveWorkflowDecisionModel() string {
+	if c == nil {
+		return ""
+	}
+	return firstConfiguredModel(c.WorkflowDecisionModel, defaultAIDecisionModel(normalizeAIProvider(c.AIProvider)))
+}
+
+func (c *Config) EffectiveEditorAgentModel() string {
+	if c == nil {
+		return ""
+	}
+	return firstConfiguredModel(c.EditorAgentModel, defaultAIEditorModel(normalizeAIProvider(c.AIProvider)))
+}
+
+// EffectiveAIBaseURL resolves the configured endpoint without rewriting the
+// administrator-managed value, so changing providers can reuse the default.
+func (c *Config) EffectiveAIBaseURL() string {
+	if c == nil {
+		return ""
+	}
+	if value := strings.TrimRight(strings.TrimSpace(c.AIBaseURL), "/"); value != "" {
+		return value
+	}
+	return defaultAIBaseURL(c.AIProvider)
+}
+
+func (c *Config) effectiveAIAPIKey() string {
+	return c.EffectiveAIAPIKey()
 }
 
 func getEnvDefault(key, fallback string) string {

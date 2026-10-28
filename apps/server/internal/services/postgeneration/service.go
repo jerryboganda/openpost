@@ -22,7 +22,7 @@ const (
 	maxDestinationCount = 12
 	maxGeneratedLength  = 12000
 	maxOutputTokens     = 6000
-	generationTimeout   = 30 * time.Second
+	generationTimeout   = 240 * time.Second
 )
 
 var (

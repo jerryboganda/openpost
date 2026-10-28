@@ -20,7 +20,7 @@ const (
 	// MaxPostContextCharacters bounds untrusted post text passed alongside an image.
 	MaxPostContextCharacters = 1000
 	maxCaptionOutputTokens   = 96
-	defaultRequestTimeout    = 15 * time.Second
+	defaultRequestTimeout    = 90 * time.Second
 )
 
 var (

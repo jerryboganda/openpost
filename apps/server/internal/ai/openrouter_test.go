@@ -242,3 +242,152 @@ func TestOpenRouterGenerateValidatesImageBeforeRequest(t *testing.T) {
 	var providerError *ProviderError
 	require.False(t, errors.As(err, &providerError))
 }
+
+func TestOpenAICompatibleGenerateOmitsOpenRouterPreferences(t *testing.T) {
+	var received map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/chat/completions", r.URL.Path)
+		require.Empty(t, r.Header.Get("HTTP-Referer"))
+		require.Empty(t, r.Header.Get("X-Title"))
+		require.Equal(t, "ses_test", r.Header.Get("x-opencode-session"))
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&received))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"gen-compatible",
+			"model":"gpt-6-luna",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"compatible answer"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+		}`))
+	}))
+	defer server.Close()
+
+	generator, err := NewOpenRouter(OpenRouterConfig{
+		Mode:          ProviderModeOpenAICompatible,
+		APIKey:        "test-api-key",
+		BaseURL:       server.URL,
+		HTTPClient:    server.Client(),
+		ProviderLabel: "OpenCode",
+		Headers:       map[string]string{"x-opencode-session": "ses_test"},
+	})
+	require.NoError(t, err)
+
+	result, err := generator.Generate(context.Background(), GenerateRequest{
+		Model:      "gpt-6-luna",
+		UserPrompt: "Return one word.",
+		ResponseSchema: &JSONSchema{
+			Name: "answer",
+			Schema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"answer": map[string]any{"type": "string"}},
+				"required":   []string{"answer"},
+			},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "compatible answer", result.Text)
+	require.Equal(t, "gpt-6-luna", received["model"])
+	require.Equal(t, false, received["stream"])
+	require.NotContains(t, received, "provider")
+	require.NotContains(t, received, "reasoning_effort")
+	require.NotContains(t, received, "tools")
+	require.Contains(t, received, "response_format")
+}
+
+func TestOpenAICompatibleGenerateSendsExplicitReasoningAndDisablesStructuredOutput(t *testing.T) {
+	var received map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&received))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"gen-2","model":"gpt-6-luna","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	generator, err := NewOpenRouter(OpenRouterConfig{
+		Mode:                    ProviderModeOpenAICompatible,
+		APIKey:                  "test-api-key",
+		BaseURL:                 server.URL,
+		HTTPClient:              server.Client(),
+		DisableStructuredOutput: true,
+	})
+	require.NoError(t, err)
+
+	_, err = generator.Generate(context.Background(), GenerateRequest{
+		Model:           "gpt-6-luna",
+		UserPrompt:      "Think carefully.",
+		ReasoningEffort: ReasoningEffortLow,
+		ResponseSchema: &JSONSchema{
+			Name:   "answer",
+			Schema: map[string]any{"type": "object"},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "low", received["reasoning_effort"])
+	require.NotContains(t, received, "response_format")
+	messages := received["messages"].([]any)
+	require.Len(t, messages, 2)
+	system := messages[0].(map[string]any)
+	require.Equal(t, "system", system["role"])
+	require.Contains(t, system["content"], "Return only a valid JSON object matching this schema")
+	require.Contains(t, system["content"], `"type":"object"`)
+}
+
+func TestOpenAICompatibleReasoningEffortOverrideWins(t *testing.T) {
+	var received map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&received))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"gen-3","model":"deepseek-v4.1-flash","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	generator, err := NewOpenRouter(OpenRouterConfig{
+		Mode:                    ProviderModeOpenAICompatible,
+		APIKey:                  "test-api-key",
+		BaseURL:                 server.URL,
+		HTTPClient:              server.Client(),
+		ReasoningEffortOverride: "max",
+	})
+	require.NoError(t, err)
+
+	_, err = generator.Generate(context.Background(), GenerateRequest{
+		Model:           "deepseek-v4.1-flash",
+		UserPrompt:      "hello",
+		ReasoningEffort: ReasoningEffortNone,
+		MaxOutputTokens: 1200,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "max", received["reasoning_effort"])
+	require.Equal(t, float64(1200+reasoningTokenHeadroom), received["max_completion_tokens"])
+}
+
+func TestOpenAICompatibleProviderErrorsUseConfiguredLabel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"do-not-expose"}}`))
+	}))
+	defer server.Close()
+
+	generator, err := NewOpenRouter(OpenRouterConfig{
+		Mode:          ProviderModeOpenAICompatible,
+		APIKey:        "test-api-key",
+		BaseURL:       server.URL,
+		HTTPClient:    server.Client(),
+		ProviderLabel: "OpenCode",
+		MaxRetries:    1,
+	})
+	require.NoError(t, err)
+
+	_, err = generator.Generate(context.Background(), GenerateRequest{
+		Model:      "gpt-6-luna",
+		UserPrompt: "hello",
+	})
+
+	var providerError *ProviderError
+	require.ErrorAs(t, err, &providerError)
+	require.Equal(t, "OpenCode", providerError.Provider)
+	require.Equal(t, http.StatusUnauthorized, providerError.StatusCode)
+	require.NotContains(t, err.Error(), "do-not-expose")
+}

@@ -2,10 +2,14 @@ package publicationdiscovery
 
 import "github.com/openpost/backend/internal/ai"
 
-func discoveryResponseSchema(input Input) *ai.JSONSchema {
+func discoveryResponseSchema(input Input, requireSources bool) *ai.JSONSchema {
+	description := "Current evidence-led publication opportunities for the selected platforms."
+	if !requireSources {
+		description = "Practical publication opportunities for the selected platforms without live web citations."
+	}
 	return &ai.JSONSchema{
 		Name:        "publication_opportunities",
-		Description: "Current evidence-led publication opportunities for the selected platforms.",
+		Description: description,
 		Schema: map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
@@ -13,14 +17,18 @@ func discoveryResponseSchema(input Input) *ai.JSONSchema {
 			"properties": map[string]any{
 				"opportunities": map[string]any{
 					"type": "array", "minItems": 1, "maxItems": input.Limit,
-					"items": discoveryOpportunitySchema(input.Platforms),
+					"items": discoveryOpportunitySchema(input.Platforms, requireSources),
 				},
 			},
 		},
 	}
 }
 
-func discoveryOpportunitySchema(platforms []string) map[string]any {
+func discoveryOpportunitySchema(platforms []string, requireSources bool) map[string]any {
+	sourceMinItems := 0
+	if requireSources {
+		sourceMinItems = 1
+	}
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
@@ -47,7 +55,7 @@ func discoveryOpportunitySchema(platforms []string) map[string]any {
 				},
 			},
 			"sources": map[string]any{
-				"type": "array", "minItems": 1, "maxItems": maxSources,
+				"type": "array", "minItems": sourceMinItems, "maxItems": maxSources,
 				"items": map[string]any{
 					"type":                 "object",
 					"additionalProperties": false,
@@ -67,7 +75,7 @@ func discoveryOpportunitySchema(platforms []string) map[string]any {
 					"required":             []string{"platform", "objective", "format", "rationale", "media"},
 					"properties": map[string]any{
 						"platform":  map[string]any{"type": "string", "enum": platforms},
-						"objective": boundedDiscoveryString(maxTreatmentText), "format": boundedDiscoveryString(maxTreatmentText),
+						"objective": boundedDiscoveryString(maxAngleLabel), "format": boundedDiscoveryString(maxAngleLabel),
 						"rationale": boundedDiscoveryString(maxTreatmentText), "media": boundedDiscoveryString(maxTreatmentText),
 					},
 				},

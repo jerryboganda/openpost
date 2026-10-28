@@ -43,8 +43,8 @@ const (
 	MaxAltTextCharacters     = 500
 
 	maxResponseCharacters  = 20_000
-	maxOutputTokens        = 1200
-	defaultRequestTimeout  = 100 * time.Second
+	maxOutputTokens        = 3000
+	defaultRequestTimeout  = 240 * time.Second
 	memeResponseSchemaName = "meme_suggestions"
 )
 

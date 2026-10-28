@@ -37,7 +37,20 @@ type HTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
+type ProviderMode string
+
+const (
+	// ProviderModeOpenRouter keeps OpenRouter-specific routing, web search,
+	// provider pinning, and zero-retention request fields.
+	ProviderModeOpenRouter ProviderMode = "openrouter"
+	// ProviderModeOpenAICompatible targets any OpenAI-compatible Chat
+	// Completions endpoint, including OpenCode Console, OpenAI, vLLM, Ollama,
+	// and LM Studio. OpenRouter-only request fields are omitted.
+	ProviderModeOpenAICompatible ProviderMode = "openai-compatible"
+)
+
 type OpenRouterConfig struct {
+	Mode        ProviderMode
 	APIKey      string
 	BaseURL     string
 	HTTPClient  HTTPClient
@@ -46,17 +59,37 @@ type OpenRouterConfig struct {
 	Timeout     time.Duration
 	// Provider pins requests to one exact OpenRouter provider slug, such as
 	// azure/eu. An empty value keeps the normal eligible-provider routing.
+	// It is ignored outside ProviderModeOpenRouter.
 	Provider   string
 	RequireZDR bool
+	// ProviderLabel names the provider in sanitized errors, such as OpenCode.
+	ProviderLabel string
+	// DisableStructuredOutput omits response_format for compatible endpoints
+	// that reject JSON Schema responses.
+	DisableStructuredOutput bool
+	// DisableWebSearch omits OpenRouter's hosted web search tool. Non-OpenRouter
+	// providers never receive that tool.
+	DisableWebSearch bool
+	// Headers are optional provider-specific request headers, such as
+	// x-opencode-session for OpenCode Go.
+	Headers map[string]string
+	// ReasoningEffortOverride forces one reasoning_effort value for every
+	// request. "auto" keeps each feature's own effort.
+	ReasoningEffortOverride string
 
 	MaxRetries       int
 	RetryMaxInterval time.Duration
 }
 
 type OpenRouter struct {
-	client     openai.Client
-	provider   string
-	requireZDR bool
+	client                  openai.Client
+	mode                    ProviderMode
+	provider                string
+	requireZDR              bool
+	label                   string
+	disableStructuredOutput bool
+	disableWebSearch        bool
+	reasoningEffortOverride string
 }
 
 // OpenRouter may return assistant content as either a string or an array of
@@ -85,9 +118,20 @@ type openRouterCompletionUsage struct {
 var _ Generator = (*OpenRouter)(nil)
 
 func NewOpenRouter(config OpenRouterConfig) (*OpenRouter, error) {
+	mode := config.Mode
+	if mode == "" {
+		mode = ProviderModeOpenRouter
+	}
+	if mode != ProviderModeOpenRouter && mode != ProviderModeOpenAICompatible {
+		return nil, fmt.Errorf("unsupported AI provider mode %q", mode)
+	}
+
 	apiKey := strings.TrimSpace(config.APIKey)
 	if apiKey == "" {
-		return nil, errors.New("OpenRouter API key is required")
+		if mode == ProviderModeOpenRouter {
+			return nil, errors.New("OpenRouter API key is required")
+		}
+		return nil, errors.New("AI provider API key is required")
 	}
 
 	timeout := durationOrDefault(config.Timeout, defaultOpenRouterTimeout)
@@ -100,41 +144,70 @@ func NewOpenRouter(config OpenRouterConfig) (*OpenRouter, error) {
 		return nil, errors.New("OpenRouter timeout and retry durations must be positive")
 	}
 
-	httpReferer := strings.TrimSpace(config.HTTPReferer)
-	if httpReferer == "" {
-		httpReferer = defaultOpenRouterHTTPReferer
-	}
-	title := strings.TrimSpace(config.XTitle)
-	if title == "" {
-		title = defaultOpenRouterTitle
-	}
-
 	baseURL := strings.TrimSpace(config.BaseURL)
 	if baseURL == "" {
+		if mode != ProviderModeOpenRouter {
+			return nil, errors.New("AI provider base URL is required")
+		}
 		baseURL = defaultOpenRouterBaseURL
 	}
+
+	label := strings.TrimSpace(config.ProviderLabel)
+	if label == "" {
+		if mode == ProviderModeOpenRouter {
+			label = "OpenRouter"
+		} else {
+			label = "OpenAI-compatible"
+		}
+	}
+
 	options := []option.RequestOption{
 		option.WithAPIKey(apiKey),
 		option.WithBaseURL(baseURL),
-		option.WithHeader("HTTP-Referer", httpReferer),
-		option.WithHeader("X-Title", title),
 		option.WithRequestTimeout(timeout),
 		option.WithMaxRetries(maxRetries),
 		option.WithMaxRetryDelay(retryMax),
+	}
+	for key, value := range config.Headers {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		options = append(options, option.WithHeader(key, value))
+	}
+	if mode == ProviderModeOpenRouter {
+		httpReferer := strings.TrimSpace(config.HTTPReferer)
+		if httpReferer == "" {
+			httpReferer = defaultOpenRouterHTTPReferer
+		}
+		title := strings.TrimSpace(config.XTitle)
+		if title == "" {
+			title = defaultOpenRouterTitle
+		}
+		options = append(options,
+			option.WithHeader("HTTP-Referer", httpReferer),
+			option.WithHeader("X-Title", title),
+		)
 	}
 	if config.HTTPClient != nil {
 		options = append(options, option.WithHTTPClient(config.HTTPClient))
 	}
 
 	return &OpenRouter{
-		client:     openai.NewClient(options...),
-		provider:   strings.TrimSpace(config.Provider),
-		requireZDR: config.RequireZDR,
+		client:                  openai.NewClient(options...),
+		mode:                    mode,
+		provider:                strings.TrimSpace(config.Provider),
+		requireZDR:              config.RequireZDR,
+		label:                   label,
+		disableStructuredOutput: config.DisableStructuredOutput,
+		disableWebSearch:        config.DisableWebSearch,
+		reasoningEffortOverride: strings.TrimSpace(config.ReasoningEffortOverride),
 	}, nil
 }
 
 func (o *OpenRouter) Generate(ctx context.Context, request GenerateRequest) (GenerateResult, error) {
-	chatRequest, requestOptions, err := buildOpenRouterRequest(request, o.provider, o.requireZDR)
+	chatRequest, requestOptions, err := buildProviderRequest(request, o.provider, o.requireZDR, o.mode, o.disableStructuredOutput, o.disableWebSearch, o.reasoningEffortOverride)
 	if err != nil {
 		return GenerateResult{}, err
 	}
@@ -149,7 +222,7 @@ func (o *OpenRouter) Generate(ctx context.Context, request GenerateRequest) (Gen
 		_, err = o.client.Chat.Completions.New(ctx, chatRequest, requestOptions...)
 	}
 	if err != nil {
-		return GenerateResult{}, sanitizeOpenRouterError(err)
+		return GenerateResult{}, sanitizeOpenRouterError(err, o.label)
 	}
 
 	text := extractOpenRouterText(response)
@@ -170,10 +243,14 @@ func (o *OpenRouter) Generate(ctx context.Context, request GenerateRequest) (Gen
 }
 
 //nolint:gocyclo // Provider-neutral generation options intentionally converge at this SDK request boundary.
-func buildOpenRouterRequest(
+func buildProviderRequest(
 	request GenerateRequest,
 	providerSlug string,
 	requireZDR bool,
+	mode ProviderMode,
+	disableStructuredOutput bool,
+	disableWebSearch bool,
+	reasoningEffortOverride string,
 ) (openai.ChatCompletionNewParams, []option.RequestOption, error) {
 	model := strings.TrimSpace(request.Model)
 	if model == "" {
@@ -185,13 +262,32 @@ func buildOpenRouterRequest(
 	if request.MaxOutputTokens < 0 {
 		return openai.ChatCompletionNewParams{}, nil, errors.New("AI maximum output tokens must not be negative")
 	}
-	webSearchTool, hasWebSearch, err := openRouterWebSearchTool(request.WebSearch)
-	if err != nil {
-		return openai.ChatCompletionNewParams{}, nil, err
+
+	var webSearchTool map[string]any
+	hasWebSearch := false
+	if mode == ProviderModeOpenRouter && !disableWebSearch {
+		var err error
+		webSearchTool, hasWebSearch, err = openRouterWebSearchTool(request.WebSearch)
+		if err != nil {
+			return openai.ChatCompletionNewParams{}, nil, err
+		}
 	}
 
 	messages := make([]openai.ChatCompletionMessageParamUnion, 0, 2)
-	if systemPrompt := strings.TrimSpace(request.SystemPrompt); systemPrompt != "" {
+	systemPrompt := strings.TrimSpace(request.SystemPrompt)
+	if request.ResponseSchema != nil && disableStructuredOutput {
+		encodedSchema, err := json.Marshal(request.ResponseSchema.Schema)
+		if err != nil {
+			return openai.ChatCompletionNewParams{}, nil, errors.New("AI response schema could not be encoded")
+		}
+		instruction := "Return only a valid JSON object matching this schema: " + string(encodedSchema)
+		if systemPrompt != "" {
+			systemPrompt += "\n\n" + instruction
+		} else {
+			systemPrompt = instruction
+		}
+	}
+	if systemPrompt != "" {
 		messages = append(messages, openai.SystemMessage(systemPrompt))
 	}
 
@@ -240,23 +336,11 @@ func buildOpenRouterRequest(
 	if err != nil {
 		return openai.ChatCompletionNewParams{}, nil, err
 	}
-	providerPreferences := map[string]any{
-		"data_collection":    "deny",
-		"require_parameters": true,
-	}
-	if providerSlug = strings.TrimSpace(providerSlug); providerSlug != "" {
-		providerPreferences["only"] = []string{providerSlug}
-		providerPreferences["allow_fallbacks"] = false
-	}
-	if requireZDR {
-		providerPreferences["zdr"] = true
-	}
 	chatRequest := openai.ChatCompletionNewParams{
-		Messages:        messages,
-		Model:           model,
-		ReasoningEffort: reasoningEffort,
+		Messages: messages,
+		Model:    model,
 	}
-	if request.ResponseSchema != nil {
+	if !disableStructuredOutput && request.ResponseSchema != nil {
 		responseFormat, err := openRouterResponseFormat(*request.ResponseSchema)
 		if err != nil {
 			return openai.ChatCompletionNewParams{}, nil, err
@@ -264,17 +348,58 @@ func buildOpenRouterRequest(
 		chatRequest.ResponseFormat.OfJSONSchema = &responseFormat
 	}
 	if request.MaxOutputTokens > 0 {
-		chatRequest.MaxCompletionTokens = param.NewOpt(request.MaxOutputTokens)
+		maxTokens := request.MaxOutputTokens
+		if mode != ProviderModeOpenRouter && reasoningConsumesOutput(request.ReasoningEffort, reasoningEffortOverride) {
+			// Generic endpoints count hidden reasoning inside max_completion_tokens.
+			// Add headroom so the answer is not starved; it is only a ceiling.
+			maxTokens += reasoningTokenHeadroom
+		}
+		chatRequest.MaxCompletionTokens = param.NewOpt(maxTokens)
 	}
 	requestOptions := []option.RequestOption{
 		option.WithJSONSet("stream", false),
-		option.WithJSONSet("provider", providerPreferences),
 	}
-	if hasWebSearch {
-		requestOptions = append(requestOptions, option.WithJSONSet("tools", []any{webSearchTool}))
+	if mode == ProviderModeOpenRouter {
+		providerPreferences := map[string]any{
+			"data_collection":    "deny",
+			"require_parameters": true,
+		}
+		if providerSlug = strings.TrimSpace(providerSlug); providerSlug != "" {
+			providerPreferences["only"] = []string{providerSlug}
+			providerPreferences["allow_fallbacks"] = false
+		}
+		if requireZDR {
+			providerPreferences["zdr"] = true
+		}
+		requestOptions = append(requestOptions, option.WithJSONSet("provider", providerPreferences))
+		if hasWebSearch {
+			requestOptions = append(requestOptions, option.WithJSONSet("tools", []any{webSearchTool}))
+		}
+	}
+	// OpenRouter always receives its explicit effort. Generic endpoints only
+	// receive it when a feature asks for reasoning, because several compatible
+	// servers reject the OpenAI "none" value. An operator override wins.
+	if override := strings.TrimSpace(reasoningEffortOverride); override != "" && !strings.EqualFold(override, "auto") {
+		requestOptions = append(requestOptions, option.WithJSONSet("reasoning_effort", override))
+	} else if mode == ProviderModeOpenRouter || (request.ReasoningEffort != "" && request.ReasoningEffort != ReasoningEffortNone) {
+		requestOptions = append(requestOptions, option.WithJSONSet("reasoning_effort", string(reasoningEffort)))
 	}
 
 	return chatRequest, requestOptions, nil
+}
+
+const reasoningTokenHeadroom = 32_000
+
+func reasoningConsumesOutput(requested ReasoningEffort, override string) bool {
+	effort := strings.ToLower(strings.TrimSpace(override))
+	if effort == "" || effort == "auto" {
+		effort = strings.ToLower(string(requested))
+	}
+	switch effort {
+	case "", "none", "minimal":
+		return false
+	}
+	return true
 }
 
 func openRouterMultimodalPartContent(part MultimodalPart) ([]openai.ChatCompletionContentPartUnionParam, error) {
@@ -592,14 +717,18 @@ func openRouterUsage(usage openRouterCompletionUsage) Usage {
 	}
 }
 
-func sanitizeOpenRouterError(err error) error {
+func sanitizeOpenRouterError(err error, providerLabel string) error {
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return context.DeadlineExceeded
 	}
-	return &ProviderError{Provider: "OpenRouter", StatusCode: openRouterStatusCode(err)}
+	label := strings.TrimSpace(providerLabel)
+	if label == "" {
+		label = "OpenRouter"
+	}
+	return &ProviderError{Provider: label, StatusCode: openRouterStatusCode(err)}
 }
 
 func openRouterStatusCode(err error) int {

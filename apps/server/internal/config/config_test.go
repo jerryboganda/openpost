@@ -52,6 +52,20 @@ var configTestEnvKeys = []string{
 	"OPENPOST_PRIVACY_VERSION",
 	"OPENPOST_SUPPORT_EMAIL",
 	"OPENROUTER_API_KEY",
+	"OPENPOST_AI_PROVIDER",
+	"OPENPOST_AI_BASE_URL",
+	"OPENPOST_AI_API_KEY",
+	"OPENCODE_API_KEY",
+	"OPENAI_API_KEY",
+	"OPENPOST_AI_STRUCTURED_OUTPUT",
+	"OPENPOST_AI_WEB_SEARCH",
+	"OPENPOST_AI_REASONING_EFFORT",
+	"OPENPOST_AI_SESSION_ID",
+	"OPENPOST_POST_BUILDER_MODEL",
+	"OPENPOST_PUBLICATION_BUILDER_MODEL",
+	"OPENPOST_IDEATE_MODEL",
+	"OPENPOST_REPURPOSE_MODEL",
+	"OPENPOST_WORKFLOW_TEXT_MODEL",
 	"OPENPOST_CONTENT_AI_PROVIDER",
 	"OPENPOST_CONTENT_AI_REQUIRE_ZDR",
 	"OPENPOST_IMAGE_CAPTION_MODEL",
@@ -166,6 +180,127 @@ func TestManagedEditionRejectsOperatorInstalledConnectors(t *testing.T) {
 
 	err := cfg.ValidateManagedSettings()
 	require.ErrorContains(t, err, "operator-installed connectors are limited to self-hosted deployments")
+}
+
+func TestLoadDefaultsToOpenRouterAIProvider(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "openrouter-key")
+
+	cfg := Load()
+
+	require.Equal(t, AIProviderOpenRouter, cfg.AIProvider)
+	require.Equal(t, "openrouter-key", cfg.EffectiveAIAPIKey())
+	require.Equal(t, defaultOpenRouterBaseURL, cfg.EffectiveAIBaseURL())
+	require.Equal(t, "openai/gpt-6-luna", cfg.EffectiveTextGenerationModel())
+	require.Equal(t, "openai/gpt-6-luna", cfg.EffectiveImageCaptionModel())
+	require.Equal(t, "typesafe/jev-1.13", cfg.EffectiveWorkflowDecisionModel())
+	require.True(t, cfg.AIWebSearch)
+	require.True(t, cfg.AIStructuredOutput)
+}
+
+func TestLoadOpenCodeAIProvider(t *testing.T) {
+	t.Setenv("OPENPOST_AI_PROVIDER", "opencode")
+	t.Setenv("OPENCODE_API_KEY", "oc_sk_test")
+
+	cfg := Load()
+
+	require.Equal(t, AIProviderOpenCode, cfg.AIProvider)
+	require.Equal(t, "oc_sk_test", cfg.EffectiveAIAPIKey())
+	require.Equal(t, defaultOpenCodeBaseURL, cfg.EffectiveAIBaseURL())
+	require.Equal(t, "gpt-6-luna", cfg.EffectiveTextGenerationModel())
+	require.Equal(t, "gpt-6-luna", cfg.EffectivePostBuilderModel())
+	require.Equal(t, "gpt-6-luna", cfg.EffectivePublicationBuilderModel())
+	require.Equal(t, "gpt-6-luna", cfg.EffectiveIdeateModel())
+	require.Equal(t, "gpt-6-luna", cfg.EffectiveRepurposeModel())
+	require.Equal(t, "gpt-6-luna", cfg.EffectiveWorkflowTextModel())
+	require.Equal(t, "gpt-6-luna", cfg.EffectiveImageCaptionModel())
+	require.Equal(t, "gpt-6-luna", cfg.EffectiveWorkflowDecisionModel())
+	require.True(t, cfg.AIWebSearch)
+	require.True(t, cfg.AIStructuredOutput)
+}
+
+func TestLoadOpenAICompatibleProviderAndModelOverrides(t *testing.T) {
+	t.Setenv("OPENPOST_AI_PROVIDER", "openai-compatible")
+	t.Setenv("OPENPOST_AI_BASE_URL", "https://llm.example/v1/")
+	t.Setenv("OPENPOST_AI_API_KEY", "generic-key")
+	t.Setenv("OPENPOST_POST_BUILDER_MODEL", "post-model")
+	t.Setenv("OPENPOST_PUBLICATION_BUILDER_MODEL", "publication-model")
+	t.Setenv("OPENPOST_IDEATE_MODEL", "ideate-model")
+	t.Setenv("OPENPOST_REPURPOSE_MODEL", "repurpose-model")
+	t.Setenv("OPENPOST_WORKFLOW_TEXT_MODEL", "workflow-model")
+
+	cfg := Load()
+
+	require.Equal(t, AIProviderOpenAI, cfg.AIProvider)
+	require.Equal(t, "generic-key", cfg.EffectiveAIAPIKey())
+	require.Equal(t, "https://llm.example/v1", cfg.EffectiveAIBaseURL())
+	require.Equal(t, "post-model", cfg.EffectivePostBuilderModel())
+	require.Equal(t, "publication-model", cfg.EffectivePublicationBuilderModel())
+	require.Equal(t, "ideate-model", cfg.EffectiveIdeateModel())
+	require.Equal(t, "repurpose-model", cfg.EffectiveRepurposeModel())
+	require.Equal(t, "workflow-model", cfg.EffectiveWorkflowTextModel())
+}
+
+func TestLoadAIReasoningEffort(t *testing.T) {
+	t.Setenv("OPENPOST_AI_REASONING_EFFORT", "max")
+
+	require.Equal(t, "max", Load().AIReasoningEffort)
+}
+
+func TestLoadPrefersGenericAIKey(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "openrouter-key")
+	t.Setenv("OPENPOST_AI_API_KEY", "generic-key")
+
+	require.Equal(t, "generic-key", Load().EffectiveAIAPIKey())
+}
+
+func TestValidateRuntimeRejectsCloudNonOpenRouterProvider(t *testing.T) {
+	cfg := validCloudRuntimeConfig()
+	cfg.AIProvider = AIProviderOpenCode
+
+	err := cfg.ValidateRuntime()
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "OPENPOST_AI_PROVIDER=opencode is limited to self-hosted deployments")
+}
+
+func TestValidateRuntimeRejectsInvalidAIBaseURL(t *testing.T) {
+	cfg := validCloudRuntimeConfig()
+	cfg.AIBaseURL = "ftp://llm.example/v1"
+
+	err := cfg.ValidateRuntime()
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "OPENPOST_AI_BASE_URL")
+}
+
+func TestValidateRuntimeRejectsInvalidAIProvider(t *testing.T) {
+	t.Setenv("OPENPOST_AI_PROVIDER", "opencodee")
+
+	err := Load().ValidateRuntime()
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "OPENPOST_AI_PROVIDER must be one of")
+}
+
+func TestManagedAISettingsApplyToConfig(t *testing.T) {
+	cfg := &Config{}
+	for key, value := range map[string]string{
+		"OPENPOST_AI_PROVIDER":             AIProviderOpenCode,
+		"OPENPOST_AI_BASE_URL":             "https://opencode.ai/inference/go/openai/v1/",
+		"OPENPOST_AI_API_KEY":              "stored-key",
+		"OPENPOST_POST_BUILDER_MODEL":      "stored-post-model",
+		"OPENPOST_IMAGE_CAPTION_MODEL":     "stored-caption-model",
+		"OPENPOST_WORKFLOW_DECISION_MODEL": "stored-decision-model",
+	} {
+		require.NoError(t, cfg.ApplyManagedValue(key, value))
+	}
+
+	require.Equal(t, AIProviderOpenCode, cfg.AIProvider)
+	require.Equal(t, "https://opencode.ai/inference/go/openai/v1", cfg.EffectiveAIBaseURL())
+	require.Equal(t, "stored-key", cfg.AIAPIKey)
+	require.Equal(t, "stored-post-model", cfg.EffectivePostBuilderModel())
+	require.Equal(t, "stored-caption-model", cfg.EffectiveImageCaptionModel())
+	require.Equal(t, "stored-decision-model", cfg.EffectiveWorkflowDecisionModel())
 }
 
 func TestLoadResolvesRelativeMediaURLAgainstCanonicalPublicURL(t *testing.T) {

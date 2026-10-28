@@ -164,7 +164,7 @@ func decodeStrictOutput(text string, target any) error {
 }
 
 //nolint:gocyclo // Every opportunity is untrusted model output with independent structural checks.
-func validateAndNormalizeOutput(output generatedResult, input Input, now time.Time) ([]Opportunity, error) {
+func validateAndNormalizeOutput(output generatedResult, input Input, now time.Time, requireSources bool) ([]Opportunity, error) {
 	if len(output.Opportunities) == 0 || len(output.Opportunities) > input.Limit {
 		return nil, invalidOutput("opportunities must contain 1 to the requested limit")
 	}
@@ -205,7 +205,7 @@ func validateAndNormalizeOutput(output generatedResult, input Input, now time.Ti
 		if err != nil {
 			return nil, err
 		}
-		sources, err := normalizeSources(generated.Sources, now)
+		sources, err := normalizeSources(generated.Sources, now, requireSources)
 		if err != nil {
 			return nil, err
 		}
@@ -251,7 +251,12 @@ func normalizeAngles(generated []generatedAngle) ([]Angle, error) {
 	return angles, nil
 }
 
-func normalizeSources(generated []SourceCitation, now time.Time) ([]SourceCitation, error) {
+func normalizeSources(generated []SourceCitation, now time.Time, requireSources bool) ([]SourceCitation, error) {
+	if !requireSources {
+		// Live search is unavailable. Drop model-provided URLs instead of
+		// presenting unverified citations or failing on unreachable pages.
+		return nil, nil
+	}
 	if len(generated) == 0 || len(generated) > maxSources {
 		return nil, invalidOutput("every opportunity requires 1 to 5 source citations")
 	}

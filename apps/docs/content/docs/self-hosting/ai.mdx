@@ -1,41 +1,117 @@
 ---
 title: AI providers
-description: Configure OpenRouter for text and captions, and fal for image generation and editing.
+description: Configure OpenRouter, OpenCode, or any OpenAI-compatible endpoint for text and captions, and fal for image generation and editing.
 icon: Sparkles
 ---
 
-Add an OpenRouter key to enable AI post generation and automatic image captions. Writing, scheduling, and publishing work without it.
+OpenPost can use OpenRouter, OpenCode Console, or any OpenAI-compatible Chat Completions endpoint for AI post generation, Ideate, automatic image captions, memes, workflow decisions, Repurpose, and the editor assistant. Writing, scheduling, and publishing work without AI.
 
-## Add a key
+## Choose a provider
 
-1. Create an API key in [OpenRouter](https://openrouter.ai/settings/keys). Check the account's billing and model access before inviting others to use generation.
-2. Add the key to the `.env` file used by your OpenPost container. Choose model IDs available to that key:
+Set `OPENPOST_AI_PROVIDER` to one of:
+
+| Value | Use it for |
+| --- | --- |
+| `openrouter` | OpenRouter's model catalog, provider routing, zero-retention controls, and hosted web search. |
+| `opencode` | OpenCode Console's OpenAI-compatible inference endpoint. |
+| `openai` | OpenAI or any other OpenAI-compatible endpoint, including vLLM, Ollama, and LM Studio. |
+
+`OPENPOST_AI_API_KEY` is the preferred key. When it is empty, OpenPost falls back to `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`, or `OPENAI_API_KEY` according to the selected provider.
+
+### OpenRouter
 
 ```dotenv
+OPENPOST_AI_PROVIDER=openrouter
 OPENROUTER_API_KEY=your-openrouter-key
-OPENPOST_TEXT_GENERATION_MODEL=openai/gpt-6-luna
-OPENPOST_WORKFLOW_DECISION_MODEL=typesafe/jev-1.13
-OPENPOST_IMAGE_CAPTION_MODEL=openai/gpt-6-luna
 ```
 
-Run `docker compose up -d --force-recreate openpost` to recreate the container with the new environment.
+The default models are `openai/gpt-6-luna` for text and vision, `typesafe/jev-1.13` for workflow decisions, and `google/gemini-3.8-flash` for the editor assistant. Confirm that [OpenRouter still offers](https://openrouter.ai/models) them before relying on the defaults.
 
-The text model builds post copy from an idea. The image caption model writes suggested alt text. The shown IDs match this release's defaults; confirm that [OpenRouter still offers](https://openrouter.ai/models) them before relying on the example.
+### OpenCode
 
-You can leave the model values unset to use OpenPost's defaults. `OPENPOST_CONTENT_AI_PROVIDER` optionally selects an exact OpenRouter provider for text and meme generation. `OPENPOST_CONTENT_AI_REQUIRE_ZDR=true` restricts those requests to zero-retention endpoints. Use it only after checking that the selected model and provider support that policy. OpenRouter [documents its per-request zero-retention behavior](https://openrouter.ai/docs/guides/features/zdr). Image captions have separate `OPENPOST_IMAGE_CAPTION_PROVIDER` and `OPENPOST_IMAGE_CAPTION_REQUIRE_ZDR` settings when you need different routing.
+Create a personal or service-account API key in the [OpenCode Console](https://opencode.ai/console). Pay-as-you-go keys use the default endpoint; OpenCode Go keys use the `/go` base URL:
 
-Keep the key in your server secret store. Use `OPENROUTER_API_KEY_FILE` for a mounted secret file. Do not include it in posts, prompts, or logs.
+```dotenv
+OPENPOST_AI_PROVIDER=opencode
+OPENCODE_API_KEY=oc_sk_...
+# Optional: only for an OpenCode Go subscription.
+OPENPOST_AI_BASE_URL=https://opencode.ai/inference/go/openai/v1
+# Required by OpenCode Go; sent as x-opencode-session.
+OPENPOST_AI_SESSION_ID=ses_your_stable_session_id
+```
+
+DeepSeek V4.1 Flash is a cost-effective text default and supports reasoning efforts `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. To use it with maximum reasoning:
+
+```dotenv
+OPENPOST_TEXT_GENERATION_MODEL=deepseek-v4.1-flash
+OPENPOST_POST_BUILDER_MODEL=deepseek-v4.1-flash
+OPENPOST_PUBLICATION_BUILDER_MODEL=deepseek-v4.1-flash
+OPENPOST_IDEATE_MODEL=deepseek-v4.1-flash
+OPENPOST_REPURPOSE_MODEL=deepseek-v4.1-flash
+OPENPOST_WORKFLOW_TEXT_MODEL=deepseek-v4.1-flash
+OPENPOST_MEME_GENERATION_MODEL=deepseek-v4.1-flash
+OPENPOST_WORKFLOW_DECISION_MODEL=deepseek-v4.1-flash
+OPENPOST_EDITOR_AGENT_MODEL=deepseek-v4.1-flash
+OPENPOST_IMAGE_CAPTION_MODEL=deepseek-v4.1-flash
+OPENPOST_AI_REASONING_EFFORT=max
+```
+
+DeepSeek V4.1 Flash supports text, vision, and reasoning efforts `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. OpenPost uses max reasoning for text features and no reasoning for image captions, where the small caption budget should go to the answer rather than hidden reasoning. DeepSeek lists a 1,048,576-token context window and up to 384K output tokens; OpenPost sends the full feature context, while each feature keeps its own product input and output bounds.
+
+Model IDs use the names shown in the [OpenCode model catalogue](https://opencode.ai/v2/docs/console/models), such as `gpt-6-luna`, `claude-haiku-4-5`, or `deepseek-v4.1-flash`. Every text model is available through the OpenAI Chat Completions endpoint, including models whose native endpoint is different.
+
+Free-tier chat models are reserved for OpenCode clients; direct inference clients need paid credits or an OpenCode Go subscription.
+
+The OpenCode SDK is an embedding API for the OpenCode coding agent, not a model inference API. OpenPost uses OpenCode's direct HTTP inference endpoint instead.
+
+### Another OpenAI-compatible endpoint
+
+```dotenv
+OPENPOST_AI_PROVIDER=openai
+OPENPOST_AI_BASE_URL=https://your-endpoint.example/v1
+OPENPOST_AI_API_KEY=your-key
+```
+
+Use the endpoint's own model IDs. If the endpoint rejects JSON Schema responses, set `OPENPOST_AI_STRUCTURED_OUTPUT=false`; features that require structured output will then depend on the model following the JSON instruction in the prompt.
+
+## Choose a model per feature
+
+The default text model is used by any feature without a dedicated setting. Each feature can use a different model:
+
+```dotenv
+OPENPOST_TEXT_GENERATION_MODEL=gpt-6-luna
+
+OPENPOST_POST_BUILDER_MODEL=gpt-6-luna
+OPENPOST_PUBLICATION_BUILDER_MODEL=gpt-6-luna
+OPENPOST_IDEATE_MODEL=gpt-6-luna
+OPENPOST_REPURPOSE_MODEL=gpt-6-luna
+OPENPOST_WORKFLOW_TEXT_MODEL=gpt-6-luna
+OPENPOST_IMAGE_CAPTION_MODEL=gpt-6-luna
+OPENPOST_MEME_GENERATION_MODEL=gpt-6-luna
+OPENPOST_WORKFLOW_DECISION_MODEL=gpt-6-luna
+OPENPOST_EDITOR_AGENT_MODEL=gpt-6-luna
+```
+
+Leave a value empty to inherit the default text model. Image captions need a model that accepts image input. Use a cheaper or faster model for short tasks and a stronger model for long-form drafting when the provider offers both.
+
+You can also set the provider, base URL, key, structured-output switch, web-search switch, and every model in **Settings → Instance → Configuration → Features**. `OPENPOST_AI_API_KEY` is stored encrypted. Environment values provide the initial defaults; a stored value applies after restart and overrides the environment value until you unset it. Changing the provider re-derives unset base URLs, keys, and model defaults.
+
+## Behaviour and limits
+
+- **Ideate web search:** live web search uses OpenRouter's hosted tool. OpenCode and other compatible endpoints work without live search, using the model's knowledge and the existing citation validation. Set `OPENPOST_AI_WEB_SEARCH=false` to disable it explicitly.
+- **Workflow decisions:** OpenRouter uses Jev through its Decisions API. OpenCode and other compatible providers answer with a strict binary JSON response from the selected decision model.
+- **Structured output:** OpenPost requests JSON Schema responses when the feature needs them. Disable `OPENPOST_AI_STRUCTURED_OUTPUT` only for endpoints that reject `response_format`.
+- **Reasoning effort:** `OPENPOST_AI_REASONING_EFFORT=auto` uses each feature's own effort. Set `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` to force one value for every text request. Image captions always use `none` so the small caption budget is reserved for output. Supported values depend on the model: for example, `gpt-6-luna` rejects `minimal`, while `deepseek-v4.1-flash` accepts it.
+- **OpenRouter routing:** `OPENPOST_CONTENT_AI_PROVIDER` and `OPENPOST_CONTENT_AI_REQUIRE_ZDR` apply only to OpenRouter. `OPENPOST_IMAGE_CAPTION_PROVIDER` and `OPENPOST_IMAGE_CAPTION_REQUIRE_ZDR` remain available for separate caption routing.
+- **Privacy:** post generation sends the idea and selected context to the configured provider. Automatic alt text sends a 400 px JPEG thumbnail and up to 1,000 characters of relevant post text, rather than the original image. Background removal, video editing, and local transcription run in the browser and do not require an AI key.
+- **Failures:** check the container logs for a sanitized provider error, then check the key, model ID, base URL, balance, and provider access. A text-only model may not be suitable for image captions.
 
 ## Check the setup
 
 1. Open a new post and ask the AI builder to turn a short idea into a draft. Review the generated copy before saving or publishing.
 2. Add an image with no existing alt text to the composer and generate a caption. Review it before publishing. Existing alt text is kept.
 
-Post generation sends the idea and selected context to the configured model through OpenRouter. Automatic alt text sends a 400 px JPEG thumbnail and up to 1,000 characters of relevant post text, rather than the original image. Background removal, video editing, and local transcription run in the browser and do not require this key.
-
-If a request fails, check the container logs for an OpenRouter error, then check the key, model ID, balance, provider slug, and zero-retention setting. A text-only model may not be suitable for image captions.
-
-Workflow AI decisions use Jev through OpenRouter's Decisions API. They route through TypeSafe and retain the content AI zero-data-retention requirement. Existing saved model settings take precedence over these defaults.
+Workflow AI decisions and Repurpose use the same provider and their configured models. Existing saved model settings take precedence over defaults.
 
 ## Image generation with fal
 

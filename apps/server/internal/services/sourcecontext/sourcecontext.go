@@ -22,8 +22,8 @@ import (
 
 const (
 	DefaultTimeout           = 10 * time.Second
-	DefaultMaxResponseBytes  = int64(1 << 20)
-	DefaultMaxTextCharacters = 30_000
+	DefaultMaxResponseBytes  = int64(4 << 20)
+	DefaultMaxTextCharacters = 100_000
 	DefaultMaxRedirects      = 5
 
 	defaultUserAgent   = "OpenPost/1.0"
@@ -31,8 +31,8 @@ const (
 	maxTitleCharacters = 300
 	maxHTMLNodes       = 100_000
 	maxTimeout         = 30 * time.Second
-	maxResponseBytes   = int64(8 << 20)
-	maxTextCharacters  = 200_000
+	maxResponseBytes   = int64(16 << 20)
+	maxTextCharacters  = 1_000_000
 	maxRedirects       = 10
 	maxUserAgentLength = 512
 )

@@ -689,52 +689,56 @@ func main() {
 	var imageGenerator ai.Generator
 	var decisionGenerator ai.Decider
 	var contentGenerator ai.Generator
-	if cfg.OpenRouterAPIKey != "" {
-		imageConfig, contentConfig := openRouterConfigs(cfg)
+	if cfg.EffectiveAIAPIKey() != "" {
+		imageConfig, contentConfig := aiProviderConfigs(cfg)
 		imageGenerator, err = ai.NewOpenRouter(imageConfig)
 		if err != nil {
-			fatalfWithDiagnostics(diagnosticsReporter, "failed to initialize OpenRouter image generator: %v", err)
+			fatalfWithDiagnostics(diagnosticsReporter, "failed to initialize AI image generator: %v", err)
 		}
 		contentGenerator, err = ai.NewOpenRouter(contentConfig)
 		if err != nil {
-			fatalfWithDiagnostics(diagnosticsReporter, "failed to initialize OpenRouter text generator: %v", err)
+			fatalfWithDiagnostics(diagnosticsReporter, "failed to initialize AI text generator: %v", err)
 		}
-		decisionConfig := contentConfig
-		decisionConfig.Provider = "typesafe"
-		decisionGenerator, err = ai.NewOpenRouter(decisionConfig)
-		if err != nil {
-			fatalfWithDiagnostics(diagnosticsReporter, "failed to initialize workflow decisions: %v", err)
+		if contentConfig.Mode == ai.ProviderModeOpenRouter {
+			decisionConfig := contentConfig
+			decisionConfig.Provider = "typesafe"
+			decisionGenerator, err = ai.NewOpenRouter(decisionConfig)
+			if err != nil {
+				fatalfWithDiagnostics(diagnosticsReporter, "failed to initialize workflow decisions: %v", err)
+			}
+		} else {
+			decisionGenerator = ai.NewGenerationDecider(contentGenerator)
 		}
 	}
 
 	var imageCaptioner imagecaption.Captioner
 	var postBuilder postgeneration.Builder
 	if imageGenerator != nil {
-		imageCaptioner, err = imagecaption.New(imageGenerator, cfg.ImageCaptionModel)
+		imageCaptioner, err = imagecaption.New(imageGenerator, cfg.EffectiveImageCaptionModel())
 		if err != nil {
 			fatalfWithDiagnostics(diagnosticsReporter, "failed to initialize automatic image captioning: %v", err)
 		}
 		log.Printf(
-			"Automatic image captioning enabled with model %s provider %s zero_data_retention=%t",
-			cfg.ImageCaptionModel,
-			cfg.ImageCaptionProvider,
+			"Automatic image captioning enabled with model %s ai_provider %s zero_data_retention=%t",
+			cfg.EffectiveImageCaptionModel(),
+			cfg.AIProvider,
 			cfg.ImageCaptionRequireZDR,
 		)
 	}
 	if contentGenerator != nil {
-		postBuilder, err = postgeneration.New(contentGenerator, cfg.TextGenerationModel, aiPromptService)
+		postBuilder, err = postgeneration.New(contentGenerator, cfg.EffectivePostBuilderModel(), aiPromptService)
 		if err != nil {
 			fatalfWithDiagnostics(diagnosticsReporter, "failed to initialize AI post builder: %v", err)
 		}
 		log.Printf(
-			"AI post builder enabled with model %s provider %s zero_data_retention=%t",
-			cfg.TextGenerationModel,
-			cfg.ContentAIProvider,
+			"AI post builder enabled with model %s ai_provider %s zero_data_retention=%t",
+			cfg.EffectivePostBuilderModel(),
+			cfg.AIProvider,
 			cfg.ContentAIRequireZDR,
 		)
 	}
 
-	repurposeSuggestions := repurpose.New(db, contentGenerator, cfg.TextGenerationModel)
+	repurposeSuggestions := repurpose.New(db, contentGenerator, cfg.EffectiveRepurposeModel())
 	var imageProvider ai.ImageProvider
 	if cfg.FalAPIKey != "" {
 		imageProvider = ai.NewFalImages(cfg.FalAPIKey)
@@ -749,7 +753,7 @@ func main() {
 		if err != nil {
 			fatalfWithDiagnostics(diagnosticsReporter, "failed to initialize public source loader: %v", err)
 		}
-		publicationBuilderService, err = publicationbuilder.New(contentGenerator, publicationbuilder.Config{Model: cfg.TextGenerationModel, Timeout: 180 * time.Second, Decider: decisionGenerator, DecisionModel: cfg.WorkflowDecisionModel})
+		publicationBuilderService, err = publicationbuilder.New(contentGenerator, publicationbuilder.Config{Model: cfg.EffectivePublicationBuilderModel(), Timeout: 240 * time.Second, Decider: decisionGenerator, DecisionModel: cfg.EffectiveWorkflowDecisionModel()})
 		if err != nil {
 			fatalfWithDiagnostics(diagnosticsReporter, "failed to initialize publication builder: %v", err)
 		}
@@ -758,7 +762,7 @@ func main() {
 			publicationBuilderService,
 			publicationbuilder.ApplicationConfig{
 				Telemetry:    telemetryRecorder,
-				Model:        cfg.TextGenerationModel,
+				Model:        cfg.EffectivePublicationBuilderModel(),
 				SourceLoader: publicSourceLoader,
 				AssetLoader:  publicationbuilder.NewMediaAssetLoader(db, storage),
 			},
@@ -767,8 +771,9 @@ func main() {
 			fatalfWithDiagnostics(diagnosticsReporter, "failed to initialize durable publication builder: %v", err)
 		}
 		publicationDiscoveryService, err = publicationdiscovery.New(contentGenerator, publicationdiscovery.Config{
-			Model:        cfg.TextGenerationModel,
-			SourceLoader: publicSourceLoader,
+			Model:            cfg.EffectiveIdeateModel(),
+			SourceLoader:     publicSourceLoader,
+			DisableWebSearch: cfg.AIProvider != config.AIProviderOpenRouter || !cfg.AIWebSearch,
 		})
 		if err != nil {
 			fatalfWithDiagnostics(diagnosticsReporter, "failed to initialize publication discovery: %v", err)
@@ -783,12 +788,12 @@ func main() {
 			fatalfWithDiagnostics(diagnosticsReporter, "failed to initialize built-in meme catalog: %v", err)
 		}
 		if contentGenerator != nil {
-			memeSuggester, err = memegeneration.New(contentGenerator, cfg.MemeGenerationModel)
+			memeSuggester, err = memegeneration.New(contentGenerator, cfg.EffectiveMemeGenerationModel())
 			if err != nil {
 				fatalfWithDiagnostics(diagnosticsReporter, "failed to initialize AI meme suggestions: %v", err)
 			}
 			memeSuggester.(*memegeneration.Service).SetTemplateProvider(memeProvider)
-			log.Printf("AI meme suggestions enabled with model %s", cfg.MemeGenerationModel)
+			log.Printf("AI meme suggestions enabled with model %s", cfg.EffectiveMemeGenerationModel())
 		}
 		log.Printf("Meme generator enabled with renderer %s", memeProvider.Key())
 	}
@@ -817,9 +822,9 @@ func main() {
 	organizationOwnershipService := organizationownership.NewService(db, notificationService, identityService)
 	workflowService := workflows.NewService(db, nil, tokenEncryptor)
 	workflowService.SetTelemetry(telemetryRecorder)
-	workflowService.SetAI(contentGenerator, cfg.TextGenerationModel)
+	workflowService.SetAI(contentGenerator, cfg.EffectiveWorkflowTextModel())
 	workflowService.SetAILimits(cfg.WorkflowsAIEnabled, cfg.WorkflowsAIMonthlyCalls)
-	workflowService.SetDecisionAI(decisionGenerator, cfg.WorkflowDecisionModel)
+	workflowService.SetDecisionAI(decisionGenerator, cfg.EffectiveWorkflowDecisionModel())
 	var worker *queue.BackgroundWorker
 	var chatWorkers inboxWorkers
 	var discordPresenceService *discordpresence.Service
@@ -998,7 +1003,7 @@ func main() {
 		MemeSuggester:             memeSuggester,
 		PostBuilder:               postBuilder,
 		EditorAgentGenerator:      contentGenerator,
-		EditorAgentModel:          cfg.EditorAgentModel,
+		EditorAgentModel:          cfg.EffectiveEditorAgentModel(),
 		ContentBuilderEnabled:     publicationBuilderApplication != nil,
 		ContentDiscoveryEnabled:   publicationDiscoveryService != nil,
 		PublicationBuilder:        publicationBuilderApplication,

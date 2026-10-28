@@ -147,7 +147,7 @@ func (service *Service) direct(ctx context.Context, input BuildInput, supported 
 	return generateValidated(ctx, service, "director", "", ai.GenerateRequest{
 		SystemPrompt: directorSystemPrompt, UserPrompt: prompt,
 		Parts: input.Parts, Images: input.Images, Files: input.Files, Audio: input.Audio, Videos: input.Videos,
-		ResponseSchema: directorResponseSchema(supported, input), MaxOutputTokens: 4_000,
+		ResponseSchema: directorResponseSchema(supported, input), MaxOutputTokens: 8_000,
 		ReasoningEffort: ai.ReasoningEffortMedium,
 	}, func(plan *DirectorPlan) error {
 		// Authored choices are input state, not model output.
@@ -226,7 +226,7 @@ func (service *Service) draftDestination(ctx context.Context, input BuildInput, 
 	return generateValidated(ctx, service, "adapter", destination.AccountID, ai.GenerateRequest{
 		SystemPrompt: adapterSystemPrompt, UserPrompt: prompt,
 		ResponseSchema:  adapterResponseSchema(destination, policy, sources),
-		MaxOutputTokens: 3_000, ReasoningEffort: ai.ReasoningEffortLow,
+		MaxOutputTokens: 6_000, ReasoningEffort: ai.ReasoningEffortLow,
 	}, func(plan *DestinationPlan) error {
 		plan.Platform = destination.Platform
 		if !policy.Native {
