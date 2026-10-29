@@ -1,6 +1,39 @@
 {
 	"components": {
 		"schemas": {
+			"AIDiagnosticOutputBody": {
+				"additionalProperties": false,
+				"properties": {
+					"$schema": {
+						"description": "A URL to the JSON Schema for this object.",
+						"examples": ["https://example.com/api/v1/schemas/AIDiagnosticOutputBody.json"],
+						"format": "uri",
+						"readOnly": true,
+						"type": "string"
+					},
+					"code": {
+						"type": "string"
+					},
+					"failure": {
+						"type": "string"
+					},
+					"latency_ms": {
+						"format": "int64",
+						"type": "integer"
+					},
+					"model": {
+						"type": "string"
+					},
+					"provider": {
+						"type": "string"
+					},
+					"valid": {
+						"type": "boolean"
+					}
+				},
+				"required": ["provider", "model", "valid", "code", "latency_ms"],
+				"type": "object"
+			},
 			"AIPromptResponse": {
 				"additionalProperties": false,
 				"properties": {
@@ -30459,6 +30492,40 @@
 				},
 				"summary": "Get OAuth authorization URL for a platform",
 				"tags": ["Accounts"]
+			}
+		},
+		"/admin/ai-diagnostic": {
+			"post": {
+				"operationId": "run-instance-ai-diagnostic",
+				"responses": {
+					"200": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AIDiagnosticOutputBody"
+								}
+							}
+						},
+						"description": "OK"
+					},
+					"default": {
+						"content": {
+							"application/problem+json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorModel"
+								}
+							}
+						},
+						"description": "Error"
+					}
+				},
+				"security": [
+					{
+						"sessionCookie": []
+					}
+				],
+				"summary": "Test the configured AI provider",
+				"tags": ["Admin"]
 			}
 		},
 		"/admin/ai-prompts": {
