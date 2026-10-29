@@ -89,6 +89,8 @@ type RouteDeps struct {
 	PostBuilder                  postgeneration.Builder
 	EditorAgentGenerator         ai.Generator
 	EditorAgentModel             string
+	AIDiagnosticProvider         string
+	AIDiagnosticModel            string
 	ContentBuilderEnabled        bool
 	ContentDiscoveryEnabled      bool
 	PublicationBuilder           *publicationbuilder.Application
@@ -367,6 +369,7 @@ func RegisterHumaRoutes(api huma.API, deps RouteDeps) {
 	).RegisterRoutes(api)
 	handlers.NewInstanceSettingsHandler(deps.InstanceSettingsService, deps.DB, deps.Authenticator).RegisterRoutes(api)
 	handlers.NewAIPromptHandler(deps.AIPromptService, deps.DB, deps.Authenticator).RegisterRoutes(api)
+	handlers.NewAIDiagnosticHandler(deps.DB, deps.Authenticator, deps.EditorAgentGenerator, deps.AIDiagnosticProvider, deps.AIDiagnosticModel).RegisterRoutes(api)
 	handlers.NewUpdateStatusHandler(deps.DB, deps.Authenticator, deps.UpdateStatusService, deps.InstanceSettingsService).RegisterRoutes(api)
 	handlers.NewGitHubStarsHandler(deps.GitHubStarsService).RegisterRoutes(api)
 

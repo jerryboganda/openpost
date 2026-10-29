@@ -10288,5 +10288,21 @@
 	"workflows_comment_review_preview": "Reply preview",
 	"workflows_comment_one_per_person": "Private campaigns send at most once per person per post. STOP and unsubscribe requests suppress future automatic replies on this account.",
 	"workflows_comment_sample_help": "Shows up to five matches among the latest 500 stored comments. No replies are sent.",
-	"workflows_comment_private_length": "Private replies support up to 1,000 UTF-8 bytes. Shorten the response before saving."
+	"workflows_comment_private_length": "Private replies support up to 1,000 UTF-8 bytes. Shorten the response before saving.",
+	"settings_ai_diagnostic_title": "AI provider test",
+	"settings_ai_diagnostic_body": "Send one explicit model request and report the provider, model, response validity, and failure status. Routine health checks never call a model.",
+	"settings_ai_diagnostic_run": "Run test",
+	"settings_ai_diagnostic_running": "Testing provider…",
+	"settings_ai_diagnostic_success": "The provider returned a valid response.",
+	"settings_ai_diagnostic_provider": "Provider",
+	"settings_ai_diagnostic_model": "Model",
+	"settings_ai_diagnostic_latency": "Response time",
+	"settings_ai_diagnostic_not_configured": "The AI provider is not configured.",
+	"settings_ai_diagnostic_invalid_credentials": "The provider rejected the configured credentials.",
+	"settings_ai_diagnostic_rate_limited": "The provider rate limited the request.",
+	"settings_ai_diagnostic_provider_error": "The provider request failed.",
+	"settings_ai_diagnostic_timeout": "The provider request timed out.",
+	"settings_ai_diagnostic_empty_response": "The provider returned an empty response.",
+	"settings_ai_diagnostic_malformed_response": "The provider returned an unexpected response.",
+	"settings_ai_diagnostic_failed": "Could not run the provider test."
 }

@@ -5,6 +5,7 @@
 	import InstanceAdminOverview from '$lib/components/instance-admin-overview.svelte';
 	import PageLoading from '$lib/components/page-loading.svelte';
 	import SectionHeader from '$lib/components/section-header.svelte';
+	import AIDiagnosticSettings from './AIDiagnosticSettings.svelte';
 	import ExternalApplicationAdminSettings from './ExternalApplicationAdminSettings.svelte';
 	import InstanceBackupSettings from './InstanceBackupSettings.svelte';
 	import { getLocaleTag } from '$lib/i18n';
@@ -205,6 +206,7 @@
 			</div>
 		{/if}
 	</div>
+	<AIDiagnosticSettings />
 	<InstanceBackupSettings {active} {userID} />
 	<ExternalApplicationAdminSettings />
 </div>
