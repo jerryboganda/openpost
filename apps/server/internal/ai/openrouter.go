@@ -118,48 +118,23 @@ type openRouterCompletionUsage struct {
 var _ Generator = (*OpenRouter)(nil)
 
 func NewOpenRouter(config OpenRouterConfig) (*OpenRouter, error) {
-	mode := config.Mode
-	if mode == "" {
-		mode = ProviderModeOpenRouter
+	mode, err := resolveProviderMode(config.Mode)
+	if err != nil {
+		return nil, err
 	}
-	if mode != ProviderModeOpenRouter && mode != ProviderModeOpenAICompatible {
-		return nil, fmt.Errorf("unsupported AI provider mode %q", mode)
+	apiKey, err := resolveProviderAPIKey(config.APIKey, mode)
+	if err != nil {
+		return nil, err
 	}
-
-	apiKey := strings.TrimSpace(config.APIKey)
-	if apiKey == "" {
-		if mode == ProviderModeOpenRouter {
-			return nil, errors.New("OpenRouter API key is required")
-		}
-		return nil, errors.New("AI provider API key is required")
+	timeout, retryMax, maxRetries, err := resolveProviderTiming(config)
+	if err != nil {
+		return nil, err
 	}
-
-	timeout := durationOrDefault(config.Timeout, defaultOpenRouterTimeout)
-	retryMax := durationOrDefault(config.RetryMaxInterval, defaultRetryMaxInterval)
-	maxRetries := config.MaxRetries
-	if maxRetries == 0 {
-		maxRetries = defaultOpenRouterMaxRetries
+	baseURL, err := resolveProviderBaseURL(config.BaseURL, mode)
+	if err != nil {
+		return nil, err
 	}
-	if timeout <= 0 || retryMax <= 0 || maxRetries < 0 {
-		return nil, errors.New("OpenRouter timeout and retry durations must be positive")
-	}
-
-	baseURL := strings.TrimSpace(config.BaseURL)
-	if baseURL == "" {
-		if mode != ProviderModeOpenRouter {
-			return nil, errors.New("AI provider base URL is required")
-		}
-		baseURL = defaultOpenRouterBaseURL
-	}
-
-	label := strings.TrimSpace(config.ProviderLabel)
-	if label == "" {
-		if mode == ProviderModeOpenRouter {
-			label = "OpenRouter"
-		} else {
-			label = "OpenAI-compatible"
-		}
-	}
+	label := resolveProviderLabel(config.ProviderLabel, mode)
 
 	options := []option.RequestOption{
 		option.WithAPIKey(apiKey),
@@ -744,4 +719,61 @@ func durationOrDefault(value, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return value
+}
+
+func resolveProviderMode(value ProviderMode) (ProviderMode, error) {
+	mode := value
+	if mode == "" {
+		mode = ProviderModeOpenRouter
+	}
+	if mode != ProviderModeOpenRouter && mode != ProviderModeOpenAICompatible {
+		return "", fmt.Errorf("unsupported AI provider mode %q", mode)
+	}
+	return mode, nil
+}
+
+func resolveProviderAPIKey(value string, mode ProviderMode) (string, error) {
+	apiKey := strings.TrimSpace(value)
+	if apiKey != "" {
+		return apiKey, nil
+	}
+	if mode == ProviderModeOpenRouter {
+		return "", errors.New("OpenRouter API key is required")
+	}
+	return "", errors.New("AI provider API key is required")
+}
+
+func resolveProviderTiming(config OpenRouterConfig) (time.Duration, time.Duration, int, error) {
+	timeout := durationOrDefault(config.Timeout, defaultOpenRouterTimeout)
+	retryMax := durationOrDefault(config.RetryMaxInterval, defaultRetryMaxInterval)
+	maxRetries := config.MaxRetries
+	if maxRetries == 0 {
+		maxRetries = defaultOpenRouterMaxRetries
+	}
+	if timeout <= 0 || retryMax <= 0 || maxRetries < 0 {
+		return 0, 0, 0, errors.New("OpenRouter timeout and retry durations must be positive")
+	}
+	return timeout, retryMax, maxRetries, nil
+}
+
+func resolveProviderBaseURL(value string, mode ProviderMode) (string, error) {
+	baseURL := strings.TrimSpace(value)
+	if baseURL != "" {
+		return baseURL, nil
+	}
+	if mode != ProviderModeOpenRouter {
+		return "", errors.New("AI provider base URL is required")
+	}
+	return defaultOpenRouterBaseURL, nil
+}
+
+func resolveProviderLabel(value string, mode ProviderMode) string {
+	label := strings.TrimSpace(value)
+	if label != "" {
+		return label
+	}
+	if mode == ProviderModeOpenRouter {
+		return "OpenRouter"
+	}
+	return "OpenAI-compatible"
 }
