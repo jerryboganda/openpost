@@ -208,6 +208,11 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._~+/=-]{24,}`),
 	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
 	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)`),
+	// Password hashes. A column that is renamed in a query would slip past the
+	// column-name mask, so the values themselves are recognized as well.
+	regexp.MustCompile(`\$2[aby]?\$\d{2}\$[./A-Za-z0-9]{53}`),
+	regexp.MustCompile(`\$argon2(?:id|i|d)\$[^\s"'<>]{20,}`),
+	regexp.MustCompile(`\$pbkdf2[-_a-z0-9]*\$[^\s"'<>]{20,}`),
 }
 
 // committedSecretPatterns are the shapes that must never be committed. They

@@ -150,6 +150,26 @@ func TestLiveModelsCallToolsAcrossSeveralSteps(t *testing.T) {
 	}
 }
 
+// askColor shows the model a red picture. A small model can rarely misread even
+// a plain swatch, so it gets a few tries with a fresh upload each time. A model
+// that cannot receive the image at all fails every try.
+func askColor(t *testing.T, service *Service, model string) liveResult {
+	t.Helper()
+	const attempts = 3
+	var result liveResult
+	for attempt := 1; attempt <= attempts; attempt++ {
+		attachment, err := service.SaveAttachment(context.Background(), "admin", "red.png", livePNG(t))
+		require.NoError(t, err)
+		result = liveRun(t, service, model, "What single color fills this image? Answer with one word.", attachment.ID)
+		if strings.Contains(strings.ToLower(result.answer), "red") {
+			return result
+		}
+		t.Logf("attempt %d of %d read the picture as %q", attempt, attempts, result.answer)
+	}
+	require.Contains(t, strings.ToLower(result.answer), "red", "the model never described the picture")
+	return result
+}
+
 func TestLiveVisionModelsReadImages(t *testing.T) {
 	service := liveAgent(t)
 	for _, option := range liveModels(t) {
@@ -157,10 +177,7 @@ func TestLiveVisionModelsReadImages(t *testing.T) {
 			continue
 		}
 		t.Run(option.ID, func(t *testing.T) {
-			attachment, err := service.SaveAttachment(context.Background(), "admin", "red.png", livePNG(t))
-			require.NoError(t, err)
-			result := liveRun(t, service, option.ID, "What single color fills this image? Answer with one word.", attachment.ID)
-			require.Contains(t, strings.ToLower(result.answer), "red")
+			result := askColor(t, service, option.ID)
 			require.Equal(t, option.ID, result.run.Model, "a model that reads images answers itself")
 		})
 	}
@@ -173,10 +190,7 @@ func TestLiveTextOnlyModelsHandOffImages(t *testing.T) {
 			continue
 		}
 		t.Run(option.ID, func(t *testing.T) {
-			attachment, err := service.SaveAttachment(context.Background(), "admin", "red.png", livePNG(t))
-			require.NoError(t, err)
-			result := liveRun(t, service, option.ID, "What single color fills this image? Answer with one word.", attachment.ID)
-			require.Contains(t, strings.ToLower(result.answer), "red")
+			result := askColor(t, service, option.ID)
 			require.NotEqual(t, option.ID, result.run.Model, "a text-only model hands the image to one that can read it")
 		})
 	}

@@ -116,11 +116,13 @@
 		event.currentTarget.value = '';
 	}
 
-	// On phones each chip shares its row, so a long model name truncates instead
-	// of pushing the others onto rows of their own.
+	// The toolbar is one row from `sm` up. On phones the attach button, the model
+	// and the send button share the first row, and the other chips share a second
+	// one, so a long model name truncates instead of pushing chips onto rows of
+	// their own. `order` places them without changing the keyboard order.
 	const triggerClass =
-		'min-w-0 flex-1 border-transparent bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground sm:max-w-44 sm:flex-none';
-	const actionClass = 'col-start-3 row-start-1 shrink-0 rounded-full sm:ml-auto';
+		'min-w-0 flex-1 border-transparent bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground sm:max-w-44 sm:flex-none sm:order-none';
+	const actionClass = 'order-3 ml-auto shrink-0 rounded-full sm:order-none';
 </script>
 
 <form
@@ -183,7 +185,7 @@
 							<Button
 								variant="outline"
 								size="icon-xs"
-								class="absolute -top-2 -right-2 rounded-full bg-background"
+								class="absolute -top-2 -right-2 size-6 rounded-full bg-background before:absolute before:-inset-2.5 before:content-[''] md:size-6 [@media(pointer:coarse)]:size-6"
 								aria-label={m.agent_remove_image({ name: item.name })}
 								onclick={() => tray.remove(item.id)}
 							>
@@ -212,9 +214,7 @@
 				onkeydown={onKeydown}
 				onpaste={onPaste}
 			/>
-			<div
-				class="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1 p-2 sm:flex sm:flex-wrap"
-			>
+			<div class="flex flex-wrap items-center gap-x-1 gap-y-0.5 p-2">
 				<input
 					bind:this={picker}
 					type="file"
@@ -228,7 +228,7 @@
 				<Button
 					variant="ghost"
 					size="icon-sm"
-					class="col-start-1 row-start-1"
+					class="order-1 sm:order-none"
 					aria-label={m.agent_attach()}
 					title={session.builtIn ? m.agent_attach() : m.agent_attach_unsupported()}
 					disabled={blocked || tray.full || !session.builtIn}
@@ -236,97 +236,108 @@
 				>
 					<ThemeIcon role="image-add" />
 				</Button>
-				<div class="col-start-2 row-start-1 flex min-w-0 items-center gap-1 sm:contents">
-					{#if choosableEngines.length > 1}
-						<Select.Root
-							type="single"
-							value={session.engine}
-							onValueChange={(next) => session.setEngine(next)}
+				{#if choosableEngines.length > 1}
+					<Select.Root
+						type="single"
+						value={session.engine}
+						onValueChange={(next) => session.setEngine(next)}
+					>
+						<Select.Trigger
+							size="sm"
+							class={cn(triggerClass, 'order-5')}
+							aria-label={m.agent_engine()}
 						>
-							<Select.Trigger size="sm" class={triggerClass} aria-label={m.agent_engine()}>
-								<span class="truncate">{engineLabel}</span>
-							</Select.Trigger>
-							<Select.Content>
-								{#each choosableEngines as engine (engine.id)}
-									<Select.Item value={engine.id} label={engine.label} disabled={!engine.available}>
-										<div class="flex min-w-0 flex-col">
-											<span class="truncate">{engine.label}</span>
-											{#if !engine.available && engine.reason}
-												<span class="text-xs font-normal text-muted-foreground">{engine.reason}</span>
-											{/if}
-										</div>
-									</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					{/if}
-					{#if session.builtIn}
-						<Select.Root
-							type="single"
-							value={session.preferences.model}
-							onValueChange={(next) => session.setModel(next)}
-						>
-							<Select.Trigger size="sm" class={triggerClass} aria-label={m.agent_model()}>
-								<span class="truncate"
-									>{session.selectedModel?.label ?? session.preferences.model}</span
-								>
-							</Select.Trigger>
-							<Select.Content>
-								{#each session.models as option (option.id)}
-									<Select.Item value={option.id} label={option.label}>
-										<div class="flex min-w-0 flex-col">
-											<span class="truncate"
-												>{option.vision
-													? option.label
-													: m.agent_model_text_only({ model: option.label })}</span
-											>
-											<span class="text-xs font-normal text-muted-foreground"
-												>{option.description}</span
-											>
-										</div>
-									</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					{/if}
-				</div>
+							<span class="truncate">{engineLabel}</span>
+						</Select.Trigger>
+						<Select.Content>
+							{#each choosableEngines as engine (engine.id)}
+								<Select.Item value={engine.id} label={engine.label} disabled={!engine.available}>
+									<div class="flex min-w-0 flex-col">
+										<span class="truncate">{engine.label}</span>
+										{#if !engine.available && engine.reason}
+											<span class="text-xs font-normal text-muted-foreground">{engine.reason}</span>
+										{/if}
+									</div>
+								</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				{/if}
 				{#if session.builtIn}
-					<div class="col-span-3 flex min-w-0 items-center gap-1 sm:contents">
-						<Select.Root
-							type="single"
-							value={session.preferences.effort}
-							onValueChange={chooseEffort}
+					<Select.Root
+						type="single"
+						value={session.preferences.model}
+						onValueChange={(next) => session.setModel(next)}
+					>
+						<Select.Trigger
+							size="sm"
+							class={cn(triggerClass, 'order-2')}
+							aria-label={m.agent_model()}
 						>
-							<Select.Trigger size="sm" class={triggerClass} aria-label={m.agent_effort()}>
-								<span class="truncate">
-									<ThemeIcon role="idea" class="mr-1 inline size-3.5 align-text-bottom sm:hidden" />
-									<span class="sm:hidden">{effortLabel(session.preferences.effort)}</span>
-									<span class="hidden sm:inline"
-										>{m.agent_effort_value({ level: effortLabel(session.preferences.effort) })}</span
-									>
-								</span>
-							</Select.Trigger>
-							<Select.Content>
-								{#each EFFORTS as effort (effort)}
-									<Select.Item value={effort} label={effortLabel(effort)} />
-								{/each}
-							</Select.Content>
-						</Select.Root>
-						<Select.Root
-							type="single"
-							value={session.preferences.access}
-							onValueChange={chooseAccess}
+							<span class="truncate">{session.selectedModel?.label ?? session.preferences.model}</span>
+						</Select.Trigger>
+						<Select.Content>
+							{#each session.models as option (option.id)}
+								<Select.Item value={option.id} label={option.label}>
+									<div class="flex min-w-0 flex-col">
+										<span class="truncate"
+											>{option.vision
+												? option.label
+												: m.agent_model_text_only({ model: option.label })}</span
+										>
+										<span class="text-xs font-normal text-muted-foreground"
+											>{option.description}</span
+										>
+									</div>
+								</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+					<Select.Root
+						type="single"
+						value={session.preferences.effort}
+						onValueChange={chooseEffort}
+					>
+						<Select.Trigger
+							size="sm"
+							class={cn(triggerClass, 'order-6')}
+							aria-label={m.agent_effort()}
 						>
-							<Select.Trigger size="sm" class={triggerClass} aria-label={m.agent_access()}>
-								<span class="truncate">{accessLabel(session.preferences.access)}</span>
-							</Select.Trigger>
-							<Select.Content>
-								{#each accessOptions as access (access)}
-									<Select.Item value={access} label={accessLabel(access)} />
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
+							<span class="truncate">
+								<ThemeIcon role="idea" class="mr-1 inline size-3.5 align-text-bottom sm:hidden" />
+								<span class="sm:hidden">{effortLabel(session.preferences.effort)}</span>
+								<span class="hidden sm:inline"
+									>{m.agent_effort_value({ level: effortLabel(session.preferences.effort) })}</span
+								>
+							</span>
+						</Select.Trigger>
+						<Select.Content>
+							{#each EFFORTS as effort (effort)}
+								<Select.Item value={effort} label={effortLabel(effort)} />
+							{/each}
+						</Select.Content>
+					</Select.Root>
+					<Select.Root
+						type="single"
+						value={session.preferences.access}
+						onValueChange={chooseAccess}
+					>
+						<Select.Trigger
+							size="sm"
+							class={cn(triggerClass, 'order-7')}
+							aria-label={m.agent_access()}
+						>
+							<span class="truncate">{accessLabel(session.preferences.access)}</span>
+						</Select.Trigger>
+						<Select.Content>
+							{#each accessOptions as access (access)}
+								<Select.Item value={access} label={accessLabel(access)} />
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				{/if}
+				{#if choosableEngines.length > 1 || session.builtIn}
+					<div class="order-4 h-0 basis-full sm:hidden" aria-hidden="true"></div>
 				{/if}
 				{#if session.working}
 					<Button

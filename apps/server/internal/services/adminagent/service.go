@@ -212,7 +212,10 @@ type Service struct {
 	specs       specCache
 	live        sync.Map
 	cancels     sync.Map
-	now         func() time.Time
+	// finished holds one channel per run that is still working. It closes when
+	// the run's goroutine has made its last write.
+	finished sync.Map
+	now      func() time.Time
 }
 
 func NewService(db *bun.DB, dispatcher Dispatcher) *Service {
@@ -355,6 +358,7 @@ func (s *Service) DeleteConversation(ctx context.Context, id string) error {
 	if active {
 		return ErrRunActive
 	}
+	s.awaitRunsEnded(ctx, id)
 	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewDelete().Model((*AgentEvent)(nil)).
 			Where("run_id IN (SELECT id FROM admin_agent_runs WHERE conversation_id = ?)", id).
@@ -376,6 +380,36 @@ func (s *Service) DeleteConversation(ctx context.Context, id string) error {
 		return fmt.Errorf("delete admin agent conversation: %w", err)
 	}
 	return nil
+}
+
+// awaitRunsEnded gives the runs of a conversation a moment to make their last
+// writes. A stopped run reports as canceled at once, but its goroutine ends a
+// little later, and deleting rows underneath it would make those writes fail.
+func (s *Service) awaitRunsEnded(ctx context.Context, conversationID string) {
+	var runIDs []string
+	if err := s.db.NewSelect().Model((*AgentRun)(nil)).Column("id").
+		Where("conversation_id = ?", conversationID).Scan(ctx, &runIDs); err != nil {
+		return
+	}
+	grace := time.NewTimer(stopGrace)
+	defer grace.Stop()
+	for _, runID := range runIDs {
+		value, working := s.finished.Load(runID)
+		if !working {
+			continue
+		}
+		done, isChannel := value.(chan struct{})
+		if !isChannel {
+			continue
+		}
+		select {
+		case <-done:
+		case <-grace.C:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func (s *Service) attachInfosToMessages(ctx context.Context, messages []AgentMessage) error {
@@ -563,7 +597,9 @@ func (s *Service) launchAgent(ctx context.Context, run *AgentRun) (*AgentRun, er
 		Exec(ctx); err != nil {
 		return nil, fmt.Errorf("record agent run: %w", err)
 	}
-	go s.executeAgent(run.ID)
+	done := make(chan struct{})
+	s.finished.Store(run.ID, done)
+	go s.executeAgent(run.ID, done)
 	return run, nil
 }
 

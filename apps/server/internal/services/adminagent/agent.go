@@ -25,6 +25,9 @@ const (
 	reasoningEchoLimit    = 8_000
 	omittedToolOutput     = "[earlier tool output omitted to save space]"
 	finishTimeout         = 30 * time.Second
+	// stopGrace is how long deleting a conversation waits for a stopped run to
+	// make its last writes.
+	stopGrace = 10 * time.Second
 )
 
 var errRunNotActive = errors.New("run is no longer active")
@@ -88,7 +91,11 @@ func (s *Service) emit(ctx context.Context, runID, key, kind, message string, da
 
 // executeAgent runs outside the request lifecycle, so closing the browser does
 // not lose work. It always ends in a terminal status or a truthful failure.
-func (s *Service) executeAgent(runID string) {
+func (s *Service) executeAgent(runID string, done chan struct{}) {
+	defer func() {
+		s.finished.Delete(runID)
+		close(done)
+	}()
 	runner := s.agent
 	if runner == nil {
 		return

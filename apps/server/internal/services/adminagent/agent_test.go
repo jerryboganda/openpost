@@ -591,10 +591,12 @@ func TestRedactionMasksConfiguredSecretsAndCredentialShapes(t *testing.T) {
 		"key sk-abcdefghijklmnopqrstuvwxyz012345",
 		"jwt eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoiYWRtaW4ifQ.c2lnbmF0dXJlMTIz",
 		"Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789",
+		"bcrypt $2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy",
+		"argon2 $argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG",
 		"plain text stays",
 	}, "\n")
 	redacted := service.redact(input)
-	for _, leaked := range []string{"super-secret-value", "gho_abcdefghijklmnopqrstuvwxyz0123456789", "sk-abcdefghijklmnopqrstuvwxyz012345", "eyJhbGciOiJIUzI1NiJ9", "abcdefghijklmnopqrstuvwxyz0123456789"} {
+	for _, leaked := range []string{"super-secret-value", "gho_abcdefghijklmnopqrstuvwxyz0123456789", "sk-abcdefghijklmnopqrstuvwxyz012345", "eyJhbGciOiJIUzI1NiJ9", "abcdefghijklmnopqrstuvwxyz0123456789", "N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy", "RdescudvJCsgt3ub"} {
 		require.NotContains(t, redacted, leaked)
 	}
 	require.Contains(t, redacted, "plain text stays")
@@ -675,4 +677,43 @@ func TestTheModelGetsItsOwnReasoningBackInTheHistory(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, texts, "a turn that holds only reasoning shows no text, so only the answer is a text event")
+}
+
+func TestDeletingRightAfterStoppingWaitsForTheRunToFinish(t *testing.T) {
+	ctx := context.Background()
+	started := make(chan struct{})
+	finishModelCall := make(chan struct{})
+	service, _ := newAgentService(t, func(ctx context.Context, _ ai.ChatRequest, _ func(string)) (ai.ChatResult, error) {
+		close(started)
+		<-ctx.Done()
+		<-finishModelCall
+		return ai.ChatResult{}, ctx.Err()
+	})
+	conversation := newAgentConversation(t, service)
+	run, err := startRun(ctx, service, conversation.ID, "Keep going.")
+	require.NoError(t, err)
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the model was never called")
+	}
+	_, err = service.CancelRun(ctx, run.ID)
+	require.NoError(t, err)
+
+	deleted := make(chan error, 1)
+	go func() { deleted <- service.DeleteConversation(ctx, conversation.ID) }()
+	select {
+	case err := <-deleted:
+		t.Fatalf("the conversation was deleted while its run was still finishing: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(finishModelCall)
+	select {
+	case err := <-deleted:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("deleting never finished")
+	}
+	_, err = service.GetConversation(ctx, conversation.ID)
+	require.ErrorIs(t, err, ErrConversationNotFound)
 }
