@@ -1,456 +1,271 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
-	import { client } from '$lib/api/client';
-	import { auth } from '$lib/stores/auth';
-	import PageContainer from '$lib/components/page-container.svelte';
-	import EmptyState from '$lib/components/empty-state.svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
+	import { AttachmentTray } from '$lib/agent/attachments.svelte';
+	import { formatDuration } from '$lib/agent/format';
+	import { AgentSession } from '$lib/agent/session.svelte';
+	import { runDurationMs } from '$lib/agent/transcript';
+	import type { AgentAttachment, AgentConversationSummary } from '$lib/agent/types';
+	import AgentComposer from '$lib/components/agent/agent-composer.svelte';
+	import AgentEmpty from '$lib/components/agent/agent-empty.svelte';
+	import AgentImageViewer from '$lib/components/agent/agent-image-viewer.svelte';
+	import AgentSidebar from '$lib/components/agent/agent-sidebar.svelte';
+	import AgentTranscript from '$lib/components/agent/agent-transcript.svelte';
+	import DestructiveConfirmDialog from '$lib/components/destructive-confirm-dialog.svelte';
 	import InlineNotice from '$lib/components/inline-notice.svelte';
-	import PageLoading from '$lib/components/page-loading.svelte';
+	import PageContainer from '$lib/components/page-container.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Textarea } from '$lib/components/ui/textarea';
-	import * as Select from '$lib/components/ui/select';
 	import { getLocaleTag } from '$lib/i18n';
 	import { m } from '$lib/paraglide/messages';
+	import { auth } from '$lib/stores/auth';
+	import { ThemeIcon } from '$lib/themes/icons';
+	import { cn } from '$lib/utils';
 
-	type Engine = { id: string; label: string; available: boolean; reason?: string };
-	type Conversation = { id: string; engine: string; title: string; updated_at: string };
-	type Message = { id: string; role: string; content: string; created_at: string };
-	type Run = {
-		id: string;
-		engine: string;
-		status: string;
-		summary?: string;
-		failure_code?: string;
-		failure_message?: string;
-		branch?: string;
-		workflow_url?: string;
-		created_at: string;
-	};
-	type RunEvent = {
-		id: string;
-		run_id: string;
-		seq: number;
-		kind: string;
-		message: string;
-		created_at: string;
-	};
-	type ConversationView = Conversation & {
-		messages: Message[];
-		runs: Run[];
-		events: RunEvent[];
-	};
+	const session = new AgentSession();
+	const tray = new AttachmentTray();
+	const locale = getLocaleTag();
 
-	const runActive = (status: string) =>
-		status === 'queued' || status === 'dispatched' || status === 'running';
+	let draft = $state('');
+	let textarea = $state<HTMLTextAreaElement | null>(null);
+	let listOpen = $state(false);
+	let viewing = $state<AgentAttachment | null>(null);
+	let dragging = $state(false);
+	let deleteOpen = $state(false);
+	let deleting = $state<AgentConversationSummary | null>(null);
+	let started = false;
 
-	let authState = $derived($auth);
-	let isAdmin = $derived(Boolean(authState.user?.is_admin));
-	let loading = $state(true);
-	let error = $state('');
-	let engines = $state<Engine[]>([]);
-	let conversations = $state<Conversation[]>([]);
-	let active = $state<ConversationView | null>(null);
-	let prompt = $state('');
-	let sending = $state(false);
-	let creating = $state(false);
-	let newEngine = $state('assistant');
-	let newTitle = $state('');
-	let stream: EventSource | null = null;
-	let lastEventSeq = 0;
-
-	const selectedEngine = $derived(engines.find((engine) => engine.id === newEngine) ?? null);
-	const activeRun = $derived(active?.runs.find((run) => runActive(run.status)) ?? null);
-	const latestRun = $derived(active?.runs.at(-1) ?? null);
-
-	onMount(() => {
-		void loadWorkspace();
+	const isAdmin = $derived(Boolean($auth.user?.is_admin));
+	const title = $derived(session.active?.title.trim() || m.agent_new_chat());
+	const elapsed = $derived(
+		session.activeRun ? formatDuration(runDurationMs(session.activeRun, session.now)) : ''
+	);
+	const unavailableReason = $derived.by(() => {
+		const id = session.active?.engine ?? session.engine;
+		const engine = session.engines.find((candidate) => candidate.id === id);
+		return engine && !engine.available ? (engine.reason ?? m.agent_engine_unavailable()) : '';
 	});
 
-	onDestroy(() => closeStream());
+	$effect(() => {
+		if (isAdmin && !started) {
+			started = true;
+			void session.start();
+		} else if (!isAdmin) {
+			session.loading = false;
+		}
+	});
 
-	async function loadWorkspace() {
-		if (!isAdmin) {
-			loading = false;
-			return;
-		}
-		loading = true;
-		error = '';
-		try {
-			const [engineResponse, conversationResponse] = await Promise.all([
-				client.GET('/admin/agent/engines'),
-				client.GET('/admin/agent/conversations')
-			]);
-			if (engineResponse.error || conversationResponse.error) {
-				error = m.agent_load_failed();
-				return;
+	onMount(() => {
+		const refocus = () => {
+			if (
+				document.visibilityState === 'visible' &&
+				session.activeRun &&
+				session.connection !== 'live'
+			) {
+				void session.resume();
 			}
-			engines = engineResponse.data?.engines ?? [];
-			conversations = conversationResponse.data?.conversations ?? [];
-			if (engines.length > 0) {
-				const current = engines.find((engine) => engine.id === newEngine);
-				if (!current || !current.available) {
-					newEngine = engines.find((engine) => engine.available)?.id ?? engines[0].id;
-				}
-			}
-			if (conversations.length > 0) {
-				await openConversation(conversations[0].id);
-			}
-		} catch {
-			error = m.agent_load_failed();
-		} finally {
-			loading = false;
-		}
-	}
-
-	async function openConversation(conversationID: string) {
-		closeStream();
-		const response = await client.GET('/admin/agent/conversations/{conversation_id}', {
-			params: { path: { conversation_id: conversationID } }
-		});
-		if (response.error || !response.data) {
-			error = m.agent_load_failed();
-			return;
-		}
-		const view = response.data.conversation;
-		const conversation: ConversationView = {
-			...view,
-			messages: view.messages ?? [],
-			runs: view.runs ?? [],
-			events: view.events ?? []
 		};
-		active = conversation;
-		error = '';
-		const running = conversation.runs.find((run) => runActive(run.status));
-		lastEventSeq = conversation.events
-			.filter((event) => event.run_id === running?.id)
-			.reduce((max, event) => Math.max(max, event.seq), 0);
-		if (running) startStream(running.id, lastEventSeq);
+		document.addEventListener('visibilitychange', refocus);
+		return () => document.removeEventListener('visibilitychange', refocus);
+	});
+
+	onDestroy(() => {
+		session.dispose();
+		tray.clear();
+	});
+
+	async function focusComposer() {
+		await tick();
+		textarea?.focus();
 	}
 
-	function startStream(runID: string, after: number) {
-		closeStream();
-		const source = new EventSource(`/api/v1/admin/agent/runs/${runID}/events?after=${after}`);
-		source.addEventListener('run', (event) => {
-			// SAFETY: EventSource dispatches a MessageEvent for named events, and the server serializes the Run model as JSON.
-			const run = JSON.parse((event as MessageEvent).data) as Run;
-			upsertRun(run);
-		});
-		source.addEventListener('event', (event) => {
-			// SAFETY: EventSource dispatches a MessageEvent for named events, and the server serializes Event records as JSON.
-			const update = JSON.parse((event as MessageEvent).data) as RunEvent;
-			if (active && !active.events.some((existing) => existing.id === update.id)) {
-				active.events.push(update);
-				lastEventSeq = Math.max(lastEventSeq, update.seq);
-			}
-		});
-		source.addEventListener('done', () => {
-			closeStream();
-			if (active) void openConversation(active.id);
-		});
-		source.addEventListener('stream_error', () => {
-			error = m.agent_load_failed();
-			closeStream();
-		});
-		source.onerror = () => closeStream();
-		stream = source;
-	}
-
-	function closeStream() {
-		stream?.close();
-		stream = null;
-	}
-
-	function upsertRun(run: Run) {
-		if (!active) return;
-		const index = active.runs.findIndex((existing) => existing.id === run.id);
-		if (index >= 0) active.runs[index] = run;
-		else active.runs.push(run);
-	}
-
-	async function createConversation() {
-		if (creating) return;
-		creating = true;
-		error = '';
-		try {
-			const response = await client.POST('/admin/agent/conversations', {
-				body: { engine: newEngine, title: newTitle.trim() }
-			});
-			if (response.error || !response.data) {
-				error = m.agent_unknown_error();
-				return;
-			}
-			newTitle = '';
-			const conversation = response.data.conversation;
-			conversations = [conversation, ...conversations];
-			await openConversation(conversation.id);
-		} catch {
-			error = m.agent_unknown_error();
-		} finally {
-			creating = false;
+	async function submit() {
+		const text = draft;
+		const images = tray.ready.flatMap((item) => (item.attachment ? [item.attachment] : []));
+		draft = '';
+		const sent = await session.send(text, images);
+		if (sent) {
+			tray.clear();
+		} else if (draft === '') {
+			draft = text;
 		}
 	}
 
-	async function sendTask() {
-		if (!active || !prompt.trim() || sending) return;
-		sending = true;
-		error = '';
-		try {
-			const response = await client.POST('/admin/agent/conversations/{conversation_id}/messages', {
-				params: { path: { conversation_id: active.id } },
-				body: { prompt: prompt.trim() }
-			});
-			if (response.error || !response.data) {
-				error = m.agent_unknown_error();
-				return;
-			}
-			prompt = '';
-			const run = response.data.run;
-			if (run.status === 'failed') {
-				error = run.failure_message || m.agent_unknown_error();
-			}
-			await openConversation(active.id);
-		} catch {
-			error = m.agent_unknown_error();
-		} finally {
-			sending = false;
-		}
+	function newChat() {
+		session.startNew();
+		tray.clear();
+		draft = '';
+		listOpen = false;
+		void focusComposer();
 	}
 
-	async function cancelRun(runID: string) {
-		const response = await client.POST('/admin/agent/runs/{run_id}/cancel', {
-			params: { path: { run_id: runID } }
-		});
-		if (response.error) {
-			error = m.agent_unknown_error();
-			return;
-		}
-		if (active) await openConversation(active.id);
+	async function select(id: string) {
+		listOpen = false;
+		if (id !== session.active?.id) await session.open(id);
+		void focusComposer();
 	}
 
-	function statusLabel(status: string) {
-		switch (status) {
-			case 'queued':
-				return m.agent_status_queued();
-			case 'dispatched':
-				return m.agent_status_dispatched();
-			case 'running':
-				return m.agent_status_running();
-			case 'succeeded':
-				return m.agent_status_succeeded();
-			case 'failed':
-				return m.agent_status_failed();
-			case 'canceled':
-				return m.agent_status_canceled();
-			default:
-				return status;
-		}
+	function askToDelete(conversation: AgentConversationSummary) {
+		deleting = conversation;
+		deleteOpen = true;
 	}
 
-	function statusTone(status: string) {
-		if (status === 'succeeded') return 'text-success-foreground';
-		if (status === 'failed') return 'text-action-destructive-foreground';
-		if (status === 'canceled') return 'text-muted-foreground';
-		return 'text-info-foreground';
+	function pick(prompt: string) {
+		draft = prompt;
+		void focusComposer().then(() => textarea?.setSelectionRange(prompt.length, prompt.length));
 	}
 
-	function formatTime(value: string) {
-		return new Intl.DateTimeFormat(getLocaleTag(), {
-			dateStyle: 'medium',
-			timeStyle: 'short'
-		}).format(new Date(value));
+	function carriesFiles(event: DragEvent): boolean {
+		return (
+			unavailableReason === '' &&
+			session.builtIn &&
+			(event.dataTransfer?.types.includes('Files') ?? false)
+		);
+	}
+
+	function onDragOver(event: DragEvent) {
+		if (!carriesFiles(event)) return;
+		event.preventDefault();
+		dragging = true;
+	}
+
+	function onDragLeave(event: DragEvent) {
+		const inside =
+			event.currentTarget instanceof Node &&
+			event.relatedTarget instanceof Node &&
+			event.currentTarget.contains(event.relatedTarget);
+		if (!inside) dragging = false;
+	}
+
+	function onDrop(event: DragEvent) {
+		if (!carriesFiles(event)) return;
+		event.preventDefault();
+		dragging = false;
+		tray.add(Array.from(event.dataTransfer?.files ?? []));
 	}
 </script>
 
-<PageContainer title={m.agent_title()} description={m.agent_description()} themeIconRole="settings">
+<PageContainer
+	title={m.agent_title()}
+	themeIconRole="assistant"
+	contentLayout="fill"
+	headerActionLayout="inline"
+	loading={isAdmin && session.loading}
+	loadingLayout="list"
+	loadingMessage={m.common_loading()}
+>
+	{#snippet actions()}
+		{#if isAdmin}
+			<Button variant="outline" onclick={newChat}>
+				<ThemeIcon role="add" />
+				{m.agent_new_chat()}
+			</Button>
+		{/if}
+	{/snippet}
+
 	{#if !isAdmin}
 		<InlineNotice tone="error" message={m.agent_admin_only()} />
-	{:else if loading}
-		<PageLoading layout="list" label={m.common_loading()} items={4} />
 	{:else}
-		<div class="grid gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
-			<aside class="space-y-4">
-				<div class="rounded-lg border bg-muted/20 p-4">
-					<h2 class="text-sm font-semibold">{m.agent_new_conversation()}</h2>
-					<div class="mt-3 space-y-3">
-						<label class="block text-sm">
-							<span class="text-muted-foreground">{m.agent_engine()}</span>
-							<Select.Root
-								type="single"
-								value={newEngine}
-								onValueChange={(value) => (newEngine = value)}
-							>
-								<Select.Trigger class="mt-1 w-full" aria-label={m.agent_engine()}>
-									{selectedEngine?.label ?? newEngine}
-								</Select.Trigger>
-								<Select.Content>
-									{#each engines as engine (engine.id)}
-										<Select.Item value={engine.id} disabled={!engine.available}>
-											{engine.label}{engine.available ? '' : ` — ${engine.reason ?? ''}`}
-										</Select.Item>
-									{/each}
-								</Select.Content>
-							</Select.Root>
-						</label>
-						{#if selectedEngine && !selectedEngine.available}
-							<InlineNotice
-								tone="warning"
-								message={selectedEngine.reason ?? m.agent_engine_unavailable()}
-							/>
-						{/if}
-						<label class="block text-sm">
-							<span class="text-muted-foreground">{m.agent_title_label()}</span>
-							<Input class="mt-1" bind:value={newTitle} placeholder={m.agent_title_placeholder()} />
-						</label>
+		<div class="flex min-h-0 flex-1 flex-col gap-3">
+			{#if session.error}
+				<InlineNotice
+					tone="error"
+					message={session.error}
+					onDismiss={() => (session.error = '')}
+					dismissLabel={m.common_dismiss()}
+				/>
+			{/if}
+			<div
+				class="min-h-[30rem] flex-1 overflow-hidden rounded-lg border bg-card lg:grid lg:grid-cols-[17rem_minmax(0,1fr)]"
+			>
+				<AgentSidebar
+					class={cn('h-full', listOpen ? 'flex' : 'hidden lg:flex')}
+					conversations={session.conversations}
+					activeId={session.active?.id ?? ''}
+					busy={session.busy}
+					now={session.now}
+					{locale}
+					onSelect={(id) => void select(id)}
+					onDelete={askToDelete}
+				/>
+				<!-- Dropping images is a shortcut. The attach button does the same by keyboard. -->
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<section
+					class={cn(
+						'relative h-full min-h-0 min-w-0 flex-col bg-background',
+						listOpen ? 'hidden lg:flex' : 'flex'
+					)}
+					aria-label={title}
+					ondragenter={onDragOver}
+					ondragover={onDragOver}
+					ondragleave={onDragLeave}
+					ondrop={onDrop}
+				>
+					<header class="flex min-h-12 shrink-0 items-center gap-2 border-b px-3">
 						<Button
-							size="sm"
-							class="w-full"
-							disabled={creating || !newEngine || !selectedEngine?.available}
-							onclick={createConversation}
+							variant="ghost"
+							size="icon-sm"
+							class="lg:hidden"
+							aria-label={m.agent_chats()}
+							onclick={() => (listOpen = true)}
 						>
-							{creating ? m.agent_sending() : m.agent_create()}
+							<ThemeIcon role="menu" />
 						</Button>
-					</div>
-				</div>
-
-				<div>
-					<h2 class="px-1 text-sm font-semibold">{m.agent_conversations()}</h2>
-					<ul class="mt-2 space-y-1">
-						{#each conversations as conversation (conversation.id)}
-							<li>
-								<button
-									type="button"
-									class="w-full rounded-md px-3 py-2 text-left text-sm hover:bg-muted"
-									class:bg-muted={active?.id === conversation.id}
-									onclick={() => openConversation(conversation.id)}
-								>
-									<span class="block truncate font-medium">
-										{conversation.title || conversation.engine}
-									</span>
-									<span class="text-xs text-muted-foreground">
-										{conversation.engine} · {formatTime(conversation.updated_at)}
-									</span>
-								</button>
-							</li>
-						{/each}
-					</ul>
-				</div>
-			</aside>
-
-			<section class="min-w-0 space-y-4">
-				{#if error}
-					<InlineNotice tone="error" message={error} />
-				{/if}
-
-				{#if !active}
-					<EmptyState
-						themeIconRole="settings"
-						title={m.agent_title()}
-						description={m.agent_empty()}
+						<h2 class="min-w-0 flex-1 truncate text-sm font-medium">{title}</h2>
+						{#if session.connection === 'reconnecting'}
+							<span class="shrink-0 text-xs text-muted-foreground" role="status">
+								{m.agent_connection_reconnecting()}
+							</span>
+						{:else if session.connection === 'lost'}
+							<span class="hidden shrink-0 text-xs text-muted-foreground sm:inline" role="status">
+								{m.agent_connection_lost()}
+							</span>
+							<Button variant="outline" size="xs" onclick={() => void session.reconnect()}>
+								{m.agent_connection_retry()}
+							</Button>
+						{:else if elapsed !== ''}
+							<span class="shrink-0 text-xs text-muted-foreground tabular-nums">{elapsed}</span>
+						{/if}
+					</header>
+					<AgentTranscript
+						turns={session.turns}
+						pending={session.pending}
+						conversationId={session.active?.id ?? ''}
+						now={session.now}
+						{locale}
+						models={session.models}
+						canRetry={!session.working && unavailableReason === ''}
+						onRetry={(text) => void session.send(text, [])}
+						onOpenImage={(image) => (viewing = image)}
+					>
+						{#snippet empty()}
+							<AgentEmpty onPick={pick} />
+						{/snippet}
+					</AgentTranscript>
+					<AgentComposer
+						{session}
+						{tray}
+						bind:value={draft}
+						bind:textarea
+						{unavailableReason}
+						onSend={() => void submit()}
 					/>
-				{:else}
-					<div class="space-y-3">
-						{#each active.messages as message (message.id)}
-							<article class="rounded-lg border p-3" class:bg-muted={message.role === 'user'}>
-								<p class="text-xs font-medium text-muted-foreground">
-									{message.role === 'user' ? m.agent_you() : m.agent_agent()}
-								</p>
-								<p class="mt-1 text-sm whitespace-pre-wrap">{message.content}</p>
-							</article>
-						{/each}
-					</div>
-
-					{#if latestRun}
-						<div class="rounded-lg border p-3" data-testid="agent-run">
-							<div class="flex flex-wrap items-center justify-between gap-2">
-								<p class="text-sm font-medium">
-									{m.agent_run_status()}:
-									<span class={statusTone(latestRun.status)}>
-										{statusLabel(latestRun.status)}
-									</span>
-								</p>
-								<div class="flex items-center gap-2">
-									{#if latestRun.workflow_url}
-										<Button
-											href={latestRun.workflow_url}
-											target="_blank"
-											rel="noreferrer"
-											variant="outline"
-											size="sm"
-										>
-											{m.agent_workflow()}
-										</Button>
-									{/if}
-									{#if runActive(latestRun.status)}
-										<Button variant="outline" size="sm" onclick={() => cancelRun(latestRun.id)}>
-											{m.agent_cancel_run()}
-										</Button>
-									{/if}
-								</div>
-							</div>
-							{#if latestRun.summary}
-								<p class="mt-2 text-sm whitespace-pre-wrap">{latestRun.summary}</p>
-							{/if}
-							{#if latestRun.failure_message}
-								<p class="mt-2 text-sm text-action-destructive-foreground">
-									{latestRun.failure_message}
-								</p>
-							{/if}
-							{#if latestRun.branch}
-								<p class="mt-2 text-xs text-muted-foreground">
-									{m.agent_branch()}: <span class="font-mono">{latestRun.branch}</span>
-								</p>
-							{/if}
+					{#if dragging}
+						<div
+							class="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-ring bg-background/85 text-sm font-medium"
+						>
+							{m.agent_drop_images()}
 						</div>
 					{/if}
-
-					<div>
-						<h2 class="text-sm font-semibold">{m.agent_run_events()}</h2>
-						{#if active.events.length === 0}
-							<p class="mt-1 text-sm text-muted-foreground">{m.agent_no_events()}</p>
-						{:else}
-							<ol class="mt-2 space-y-2">
-								{#each active.events as event (event.id)}
-									<li class="flex gap-3 text-sm">
-										<span class="w-32 shrink-0 text-xs text-muted-foreground">
-											{formatTime(event.created_at)}
-										</span>
-										<span class="min-w-0">
-											<span class="font-medium">{event.kind}</span>
-											<span class="text-muted-foreground"> · {event.message}</span>
-										</span>
-									</li>
-								{/each}
-							</ol>
-						{/if}
-					</div>
-
-					<form
-						class="space-y-2"
-						onsubmit={(event) => {
-							event.preventDefault();
-							void sendTask();
-						}}
-					>
-						<Textarea
-							bind:value={prompt}
-							placeholder={m.agent_prompt_placeholder()}
-							rows={4}
-							disabled={sending || Boolean(activeRun)}
-						/>
-						<div class="flex items-center justify-between gap-2">
-							<p class="text-xs text-muted-foreground">{m.agent_description()}</p>
-							<Button
-								type="submit"
-								size="sm"
-								disabled={sending || !prompt.trim() || Boolean(activeRun)}
-							>
-								{sending ? m.agent_sending() : m.agent_send()}
-							</Button>
-						</div>
-					</form>
-				{/if}
-			</section>
+				</section>
+			</div>
 		</div>
 	{/if}
 </PageContainer>
+
+<AgentImageViewer bind:image={viewing} />
+
+<DestructiveConfirmDialog
+	bind:open={deleteOpen}
+	title={m.agent_delete_title()}
+	description={m.agent_delete_description()}
+	onConfirm={() => session.remove(deleting?.id ?? '')}
+/>

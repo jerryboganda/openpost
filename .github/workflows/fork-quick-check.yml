@@ -1,0 +1,206 @@
+name: Fork Quick Check
+
+# Fork-only fast feedback for feature, fix, and agent branches. It runs the Go
+# build, vet, lint, and focused tests, plus the web lint, type check, and agent
+# unit tests, and the repository policy checks, in a few minutes instead of the
+# roughly 40 minutes of the full pull request checks. The jobs run in parallel
+# and every step reports even when an earlier step failed, so one run shows every
+# problem. The full checks still gate every merge. The administrator agent starts
+# this workflow by pushing to an agent/* branch and reads the result with
+# ci_status.
+on:
+  push:
+    branches:
+      - "feat/**"
+      - "fix/**"
+      - "agent/**"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch or commit to check
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-quick-check-${{ github.event.inputs.ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: "1.3.11"
+
+jobs:
+  backend-test:
+    name: Backend build and focused tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.ref || github.sha }}
+          sparse-checkout: |
+            /*
+            !/apps/web/static/image-editor-models/
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: apps/server/go.sum
+      # The dev tag serves the web app from disk, so the Go checks do not need
+      # the embedded frontend build.
+      - name: Build and vet
+        working-directory: apps/server
+        run: |
+          go build -tags dev ./...
+          go vet -tags dev ./internal/ai/... ./internal/services/adminagent/... ./internal/api/... ./internal/operational/... ./cmd/...
+      - name: Focused tests
+        if: ${{ !cancelled() }}
+        working-directory: apps/server
+        run: |
+          status=0
+          go test ./internal/ai/... ./internal/operational/... || status=1
+          # The agent runs work in the background, so these run several times and
+          # under the race detector to catch ordering bugs that pass by luck.
+          go test -race -count=3 ./internal/services/adminagent/... || status=1
+          go test ./internal/api || status=1
+          go test -race -count=15 ./internal/api/handlers -run 'AdminAgent|AIDiagnostic' || status=1
+          exit "$status"
+
+  backend-lint:
+    name: Backend lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.ref || github.sha }}
+          sparse-checkout: |
+            /*
+            !/apps/web/static/image-editor-models/
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: apps/server/go.sum
+      - name: Install the pinned Go linter
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.11.4
+          install-only: true
+      - name: Format the Go sources
+        working-directory: apps/server
+        run: gofmt -w .
+      - name: Lint
+        working-directory: apps/server
+        run: golangci-lint run --build-tags dev ./internal/ai/... ./internal/services/adminagent/... ./internal/api/... ./internal/operational/... ./cmd/...
+
+  web:
+    name: Web lint, type check, and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.ref || github.sha }}
+          sparse-checkout: |
+            /*
+            !/apps/web/static/image-editor-models/
+          sparse-checkout-cone-mode: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: apps/server/go.sum
+      - run: bun install --frozen-lockfile
+      # Both linters always run, so one run shows every lint problem.
+      - name: Lint
+        working-directory: apps/web
+        run: |
+          status=0
+          bun run lint:oxlint || status=1
+          bun run lint:svelte || status=1
+          exit "$status"
+      - name: Type check
+        if: ${{ !cancelled() }}
+        run: bun run check -- frontend
+      - name: Query and unit tests
+        if: ${{ !cancelled() }}
+        run: |
+          bun scripts/check-query-migration.mjs
+          cd apps/web
+          bun run generate:i18n
+          bun run test:server src/lib/agent
+
+  policy:
+    name: Repository policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_LINUX_X64_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.ref || github.sha }}
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: |
+            apps/server/go.sum
+            apps/cli/go.sum
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+      - name: Install the pinned secret scanner
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          curl --fail --location --silent --show-error \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            --output "$archive"
+          printf '%s  %s\n' "$GITLEAKS_LINUX_X64_SHA256" "$archive" | sha256sum --check --status
+          tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
+          chmod +x "$RUNNER_TEMP/gitleaks"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - run: bun install --frozen-lockfile
+      - name: Install the standalone mobile app for reachability analysis
+        working-directory: apps/mobile
+        run: bun install --frozen-lockfile
+      # The same three checks as the full pull request run, each reporting on its
+      # own, so a formatting problem does not hide a policy problem.
+      - name: Format
+        run: bun run format:check
+      # The aggregate `check -- policy` stops at its first failing stage and
+      # reports the rest as interrupted. Running each stage on its own lists
+      # every failure from one run instead of one per push.
+      - name: Policy
+        if: ${{ !cancelled() }}
+        env:
+          OPENPOST_SECRET_SCAN_HEAD: ${{ github.event.inputs.ref || github.sha }}
+        run: |
+          OPENPOST_SECRET_SCAN_BASE="$(git merge-base origin/main HEAD)"
+          export OPENPOST_SECRET_SCAN_BASE
+          failed=()
+          bun run --filter @openpost/web generate:i18n || failed+=(translations)
+          for stage in contracts build-graph assets workflows mcp-registry docs release-version \
+            secret-scan app-routes legal-policy provider-certification provider-facts \
+            plan-catalog changelog social-images reachability compatibility ui-consistency \
+            query-migration tasks; do
+            echo "::group::policy stage ${stage}"
+            bun run check -- "$stage" || failed+=("$stage")
+            echo "::endgroup::"
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "::error::Policy stages failed: ${failed[*]}"
+            exit 1
+          fi
+      - name: Script tests
+        if: ${{ !cancelled() }}
+        run: bun test ./scripts

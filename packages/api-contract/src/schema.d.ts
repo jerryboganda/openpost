@@ -549,7 +549,8 @@ export interface paths {
         get: operations["get-admin-agent-conversation"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Delete an administrator agent conversation */
+        delete: operations["delete-admin-agent-conversation"];
         options?: never;
         head?: never;
         patch?: never;
@@ -564,7 +565,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Start an administrator agent run */
+        /** Send a message to the administrator agent */
         post: operations["start-admin-agent-run"];
         delete?: never;
         options?: never;
@@ -579,7 +580,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List coding engines */
+        /** List agent engines and models */
         get: operations["list-admin-agent-engines"];
         put?: never;
         post?: never;
@@ -7554,7 +7555,9 @@ export interface components {
              * @example https://example.com/api/v1/schemas/AdminAgentEnginesOutputBody.json
              */
             readonly $schema?: string;
+            default_model: string;
             engines: components["schemas"]["EngineStatus"][] | null;
+            models: components["schemas"]["ModelOption"][] | null;
         };
         AdminAgentRunOutputBody: {
             /**
@@ -7578,6 +7581,10 @@ export interface components {
         AgentEvent: {
             /** Format: date-time */
             created_at: string;
+            /** @description Structured details such as a tool call's name, arguments, and result */
+            data?: {
+                [key: string]: unknown;
+            };
             id: string;
             kind: string;
             message: string;
@@ -7586,6 +7593,7 @@ export interface components {
             seq: number;
         };
         AgentMessage: {
+            attachments?: components["schemas"]["AttachmentInfo"][] | null;
             content: string;
             conversation_id: string;
             /** Format: date-time */
@@ -7595,18 +7603,25 @@ export interface components {
             run_id?: string;
         };
         AgentRun: {
+            access?: string;
             base_revision?: string;
             branch?: string;
             conversation_id: string;
             /** Format: date-time */
             created_at: string;
             dispatch_ref?: string;
+            effort?: string;
             engine: string;
             failure_code?: string;
             failure_message?: string;
             /** Format: date-time */
             finished_at?: string;
             id: string;
+            /** Format: int64 */
+            input_tokens?: number;
+            model?: string;
+            /** Format: int64 */
+            output_tokens?: number;
             prompt: string;
             /** Format: date-time */
             started_at?: string;
@@ -7917,6 +7932,19 @@ export interface components {
             voice_profile_id?: string;
             /** @description Workspace ID */
             workspace_id: string;
+        };
+        AttachmentInfo: {
+            content_type: string;
+            /** Format: date-time */
+            created_at: string;
+            filename: string;
+            /** Format: int64 */
+            height: number;
+            id: string;
+            /** Format: int64 */
+            size_bytes: number;
+            /** Format: int64 */
+            width: number;
         };
         AuditChangedField: {
             current?: string;
@@ -9023,9 +9051,9 @@ export interface components {
              * @example https://example.com/api/v1/schemas/CreateAdminAgentConversationInputBody.json
              */
             readonly $schema?: string;
-            /** @description Coding engine: opencode, codex, or claude */
+            /** @description Engine: assistant (the built-in OpenPost Agent), opencode, codex, or claude */
             engine: string;
-            /** @description Optional conversation title */
+            /** @description Optional conversation title; the first message names an untitled conversation */
             title?: string;
             /** @description Optional workspace boundary for the conversation */
             workspace_id?: string;
@@ -13003,6 +13031,12 @@ export interface components {
             /** Format: int64 */
             value: number;
         };
+        ModelOption: {
+            description: string;
+            id: string;
+            label: string;
+            vision: boolean;
+        };
         Mute: {
             /** Format: date-time */
             ends_at: string;
@@ -16469,8 +16503,16 @@ export interface components {
              * @example https://example.com/api/v1/schemas/StartAdminAgentRunInputBody.json
              */
             readonly $schema?: string;
-            /** @description Task or question for the selected coding engine */
-            prompt: string;
+            /** @description Access for the built-in agent: full or read_only */
+            access?: string;
+            /** @description Uploaded images to include with this message, up to 5 */
+            attachment_ids?: string[] | null;
+            /** @description Reasoning effort: auto, low, medium, or high */
+            effort?: string;
+            /** @description Model id for the built-in agent; empty uses the instance default */
+            model?: string;
+            /** @description Task or question. May be empty when images are attached */
+            prompt?: string;
         };
         StartCLIAuthInputBody: {
             /**
@@ -20651,6 +20693,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AdminAgentConversationOutputBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "delete-admin-agent-conversation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

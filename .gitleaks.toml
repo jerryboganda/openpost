@@ -45,3 +45,11 @@ condition = "AND"
 regexTarget = "match"
 paths = ['''(?:^|/)patches/@asamuzakjp%2Fcss-color@3\.2\.0\.patch$''']
 regexes = ['''-token",t\.Close(?:Paren|Square)="''']
+
+[[allowlists]]
+description = "The administrator agent redaction test masks a made-up JWT, so the literal is a fixture, not a credential"
+targetRules = ["jwt"]
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)apps/server/internal/services/adminagent/agent_test\.go$''']
+regexes = ['''eyJhbGciOiJIUzI1NiJ9\.eyJ1c2VyIjoiYWRtaW4ifQ\.c2lnbmF0dXJlMTIz''']

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -19,8 +20,11 @@ import (
 )
 
 const (
-	adminAgentStreamLifetime = 10 * time.Minute
+	adminAgentStreamLifetime = 45 * time.Minute
 	adminAgentCallbackLimit  = 1 << 20
+	adminAgentStreamTick     = 250 * time.Millisecond
+	adminAgentPollEvery      = 4
+	adminAgentHeartbeatEvery = 60
 )
 
 type AdminAgentHandler struct {
@@ -44,7 +48,9 @@ type AdminAgentConversationResponse struct {
 
 type adminAgentEnginesOutput struct {
 	Body struct {
-		Engines []adminagent.EngineStatus `json:"engines"`
+		Engines      []adminagent.EngineStatus `json:"engines"`
+		Models       []adminagent.ModelOption  `json:"models"`
+		DefaultModel string                    `json:"default_model"`
 	}
 }
 
@@ -68,8 +74,8 @@ type adminAgentRunOutput struct {
 
 type createAdminAgentConversationInput struct {
 	Body struct {
-		Engine      string `json:"engine" doc:"Coding engine: opencode, codex, or claude"`
-		Title       string `json:"title,omitempty" doc:"Optional conversation title"`
+		Engine      string `json:"engine" doc:"Engine: assistant (the built-in OpenPost Agent), opencode, codex, or claude"`
+		Title       string `json:"title,omitempty" doc:"Optional conversation title; the first message names an untitled conversation"`
 		WorkspaceID string `json:"workspace_id,omitempty" doc:"Optional workspace boundary for the conversation"`
 	}
 }
@@ -85,7 +91,11 @@ type adminAgentRunPathInput struct {
 type startAdminAgentRunInput struct {
 	ConversationID string `path:"conversation_id"`
 	Body           struct {
-		Prompt string `json:"prompt" doc:"Task or question for the selected coding engine"`
+		Prompt        string   `json:"prompt,omitempty" doc:"Task or question. May be empty when images are attached"`
+		AttachmentIDs []string `json:"attachment_ids,omitempty" doc:"Uploaded images to include with this message, up to 5"`
+		Model         string   `json:"model,omitempty" doc:"Model id for the built-in agent; empty uses the instance default"`
+		Effort        string   `json:"effort,omitempty" doc:"Reasoning effort: auto, low, medium, or high"`
+		Access        string   `json:"access,omitempty" doc:"Access for the built-in agent: full or read_only"`
 	}
 }
 
@@ -102,7 +112,7 @@ func (h *AdminAgentHandler) RegisterRoutes(api huma.API) {
 	authMiddleware := middleware.AuthMiddleware(api, h.auth)
 	huma.Register(api, huma.Operation{
 		OperationID: "list-admin-agent-engines", Method: http.MethodGet, Path: "/admin/agent/engines",
-		Summary: "List coding engines", Tags: []string{"Admin"},
+		Summary: "List agent engines and models", Tags: []string{"Admin"},
 		Middlewares: huma.Middlewares{authMiddleware},
 	}, h.engines)
 	huma.Register(api, huma.Operation{
@@ -121,8 +131,14 @@ func (h *AdminAgentHandler) RegisterRoutes(api huma.API) {
 		Middlewares: huma.Middlewares{authMiddleware},
 	}, h.getConversation)
 	huma.Register(api, huma.Operation{
+		OperationID: "delete-admin-agent-conversation", Method: http.MethodDelete, Path: "/admin/agent/conversations/{conversation_id}",
+		Summary: "Delete an administrator agent conversation", Tags: []string{"Admin"},
+		DefaultStatus: http.StatusNoContent,
+		Middlewares:   huma.Middlewares{authMiddleware},
+	}, h.deleteConversation)
+	huma.Register(api, huma.Operation{
 		OperationID: "start-admin-agent-run", Method: http.MethodPost, Path: "/admin/agent/conversations/{conversation_id}/messages",
-		Summary: "Start an administrator agent run", Tags: []string{"Admin"},
+		Summary: "Send a message to the administrator agent", Tags: []string{"Admin"},
 		Middlewares: huma.Middlewares{authMiddleware},
 	}, h.startRun)
 	huma.Register(api, huma.Operation{
@@ -132,22 +148,28 @@ func (h *AdminAgentHandler) RegisterRoutes(api huma.API) {
 	}, h.cancelRun)
 }
 
-// RegisterEchoRoutes owns the two transports Huma cannot express: an SSE
-// progress stream and the unauthenticated, HMAC-verified Actions callback.
+// RegisterEchoRoutes owns the transports Huma cannot express: the SSE progress
+// stream, image upload and download, and the unauthenticated, HMAC-verified
+// Actions callback.
 func (h *AdminAgentHandler) RegisterEchoRoutes(e *echo.Echo) {
 	auth := middleware.BearerMiddleware(h.auth)
 	e.GET("/api/v1/admin/agent/runs/:run_id/events", h.streamEvents, auth)
 	e.GET("/api/v1/admin/agent/runs/:run_id/context", h.runContext)
 	e.POST("/api/v1/admin/agent/callback", h.callback)
+	e.POST("/api/v1/admin/agent/attachments", h.uploadAttachment, auth)
+	e.GET("/api/v1/admin/agent/attachments/:attachment_id", h.serveAttachment, auth)
 }
 
 func (h *AdminAgentHandler) engines(ctx context.Context, _ *struct{}) (*adminAgentEnginesOutput, error) {
 	if err := requireBrowserSessionInstanceAdmin(ctx, h.db); err != nil {
 		return nil, err
 	}
-	return &adminAgentEnginesOutput{Body: struct {
-		Engines []adminagent.EngineStatus `json:"engines"`
-	}{Engines: h.service.Engines()}}, nil
+	defaultModel, options := h.service.Models()
+	out := &adminAgentEnginesOutput{}
+	out.Body.Engines = h.service.Engines()
+	out.Body.Models = append(make([]adminagent.ModelOption, 0, len(options)), options...)
+	out.Body.DefaultModel = defaultModel
+	return out, nil
 }
 
 func (h *AdminAgentHandler) listConversations(ctx context.Context, _ *struct{}) (*adminAgentConversationsOutput, error) {
@@ -172,7 +194,7 @@ func (h *AdminAgentHandler) createConversation(
 	}
 	engine, err := adminagent.ParseEngine(input.Body.Engine)
 	if err != nil {
-		return nil, huma.Error400BadRequest("engine must be opencode, codex, or claude")
+		return nil, huma.Error400BadRequest("engine must be assistant, opencode, codex, or claude")
 	}
 	workspaceID := input.Body.WorkspaceID
 	if workspaceID != "" {
@@ -219,6 +241,27 @@ func (h *AdminAgentHandler) getConversation(
 	return out, nil
 }
 
+func (h *AdminAgentHandler) deleteConversation(
+	ctx context.Context,
+	input *adminAgentConversationPathInput,
+) (*struct{}, error) {
+	if err := requireBrowserSessionInstanceAdmin(ctx, h.db); err != nil {
+		return nil, err
+	}
+	if err := h.service.DeleteConversation(ctx, input.ConversationID); err != nil {
+		switch {
+		case errors.Is(err, adminagent.ErrConversationNotFound):
+			return nil, huma.Error404NotFound("conversation not found")
+		case errors.Is(err, adminagent.ErrRunActive):
+			return nil, huma.Error409Conflict("stop the running task before deleting this conversation")
+		default:
+			log.Printf("admin agent: delete conversation %s: %v", input.ConversationID, err)
+			return nil, huma.Error500InternalServerError("failed to delete agent conversation")
+		}
+	}
+	return &struct{}{}, nil
+}
+
 func (h *AdminAgentHandler) startRun(
 	ctx context.Context,
 	input *startAdminAgentRunInput,
@@ -226,20 +269,38 @@ func (h *AdminAgentHandler) startRun(
 	if err := requireBrowserSessionInstanceAdmin(ctx, h.db); err != nil {
 		return nil, err
 	}
-	run, err := h.service.StartRun(ctx, input.ConversationID, input.Body.Prompt)
+	run, err := h.service.StartRun(ctx, adminagent.StartRunInput{
+		ConversationID: input.ConversationID,
+		UserID:         middleware.GetUserID(ctx),
+		Prompt:         input.Body.Prompt,
+		AttachmentIDs:  input.Body.AttachmentIDs,
+		Model:          input.Body.Model,
+		Effort:         input.Body.Effort,
+		Access:         input.Body.Access,
+	})
 	if err != nil {
-		switch {
-		case errors.Is(err, adminagent.ErrConversationNotFound):
-			return nil, huma.Error404NotFound("conversation not found")
-		case errors.Is(err, adminagent.ErrInvalidPrompt):
-			return nil, huma.Error400BadRequest("prompt must contain between 1 and 20000 characters")
-		default:
-			return nil, huma.Error500InternalServerError("failed to start agent run")
-		}
+		return nil, startRunError(err)
 	}
 	out := &adminAgentRunOutput{}
 	out.Body.AgentRun = *run
 	return out, nil
+}
+
+func startRunError(err error) error {
+	switch {
+	case errors.Is(err, adminagent.ErrConversationNotFound):
+		return huma.Error404NotFound("conversation not found")
+	case errors.Is(err, adminagent.ErrInvalidPrompt):
+		return huma.Error400BadRequest("send a message of up to 20000 characters, an image, or both")
+	case errors.Is(err, adminagent.ErrRunActive):
+		return huma.Error409Conflict("a task is already running in this conversation; wait for it or stop it")
+	case errors.Is(err, adminagent.ErrAttachmentNotFound), errors.Is(err, adminagent.ErrTooManyAttachments),
+		errors.Is(err, adminagent.ErrInvalidModel), errors.Is(err, adminagent.ErrInvalidEffort),
+		errors.Is(err, adminagent.ErrInvalidAccess):
+		return huma.Error400BadRequest(err.Error())
+	default:
+		return huma.Error500InternalServerError("failed to start agent run")
+	}
 }
 
 func (h *AdminAgentHandler) cancelRun(
@@ -263,6 +324,44 @@ func (h *AdminAgentHandler) cancelRun(
 	out := &adminAgentRunOutput{}
 	out.Body.AgentRun = *run
 	return out, nil
+}
+
+func (h *AdminAgentHandler) uploadAttachment(c echo.Context) error {
+	if err := h.authorizeEcho(c); err != nil {
+		return err
+	}
+	ctx := c.Request().Context()
+	body := http.MaxBytesReader(c.Response(), c.Request().Body, adminagent.MaxAttachmentBytes+1)
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return c.JSON(http.StatusRequestEntityTooLarge, map[string]string{fieldError: "image is larger than 4 MB"})
+	}
+	info, err := h.service.SaveAttachment(ctx, middleware.GetUserID(ctx), c.QueryParam("filename"), data)
+	if err != nil {
+		if errors.Is(err, adminagent.ErrInvalidAttachment) {
+			return c.JSON(http.StatusBadRequest, map[string]string{fieldError: err.Error()})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{fieldError: "failed to store the image"})
+	}
+	return c.JSON(http.StatusCreated, info)
+}
+
+func (h *AdminAgentHandler) serveAttachment(c echo.Context) error {
+	if err := h.authorizeEcho(c); err != nil {
+		return err
+	}
+	stored, err := h.service.Attachment(c.Request().Context(), c.Param("attachment_id"))
+	if err != nil {
+		if errors.Is(err, adminagent.ErrAttachmentNotFound) {
+			return c.JSON(http.StatusNotFound, map[string]string{fieldError: "image not found"})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{fieldError: "image unavailable"})
+	}
+	header := c.Response().Header()
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	header.Set("Cache-Control", "private, max-age=86400")
+	return c.Blob(http.StatusOK, stored.ContentType, stored.Data)
 }
 
 func (h *AdminAgentHandler) streamEvents(c echo.Context) error {
@@ -304,24 +403,41 @@ func (h *AdminAgentHandler) streamEvents(c echo.Context) error {
 	if !send("run", run) {
 		return nil
 	}
-	h.forwardRunEvents(ctx, runID, run, after, send)
+	h.forwardRunEvents(ctx, runID, run, after, send, func() bool {
+		if _, err := fmt.Fprint(c.Response().Writer, ": keep-alive\n\n"); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	})
 	return nil
 }
 
+// forwardRunEvents pushes stored events and the in-progress text of the current
+// model turn. Stored events are read about once a second, or immediately when
+// the live text changes, so a finished turn appears before its live copy clears.
 func (h *AdminAgentHandler) forwardRunEvents(
 	ctx context.Context,
 	runID string,
 	run *adminagent.AgentRun,
 	after int64,
 	send func(string, any) bool,
+	keepAlive func() bool,
 ) {
 	lastStatus := run.Status
-	ticker := time.NewTicker(time.Second)
+	initial, lastVersion := h.service.LiveText(runID)
+	if initial != "" {
+		lastVersion = -1
+	}
+	ticker := time.NewTicker(adminAgentStreamTick)
 	defer ticker.Stop()
 	lifetime := time.NewTimer(adminAgentStreamLifetime)
 	defer lifetime.Stop()
-	for {
+	for tick := 1; ; tick++ {
 		if adminagent.RunStatus(run.Status).Terminal() {
+			// Flush anything the last poll missed, so the final answer always
+			// arrives before the stream ends.
+			_, _ = h.sendNewEvents(ctx, runID, &after, &lastStatus, send)
 			send("done", map[string]string{"status": run.Status})
 			return
 		}
@@ -331,30 +447,59 @@ func (h *AdminAgentHandler) forwardRunEvents(
 		case <-lifetime.C:
 			return
 		case <-ticker.C:
-			events, err := h.service.Events(ctx, runID, after)
-			if err != nil {
-				send("stream_error", map[string]string{"message": "progress unavailable"})
-				return
-			}
-			for _, event := range events {
-				if !send("event", event) {
-					return
-				}
-				after = event.Seq
-			}
-			updated, err := h.service.GetRun(ctx, runID)
-			if err != nil {
+		}
+		text, version := h.service.LiveText(runID)
+		liveChanged := version != lastVersion
+		if tick%adminAgentPollEvery == 0 || liveChanged {
+			updated, ok := h.sendNewEvents(ctx, runID, &after, &lastStatus, send)
+			if !ok {
 				return
 			}
 			run = updated
-			if run.Status != lastStatus {
-				lastStatus = run.Status
-				if !send("run", run) {
-					return
-				}
+		}
+		if liveChanged {
+			lastVersion = version
+			if !send("live", map[string]string{"text": text}) {
+				return
 			}
 		}
+		if tick%adminAgentHeartbeatEvery == 0 && !keepAlive() {
+			return
+		}
 	}
+}
+
+// sendNewEvents forwards stored events after the cursor and any status change.
+// It returns the refreshed run, and false when the stream should end.
+func (h *AdminAgentHandler) sendNewEvents(
+	ctx context.Context,
+	runID string,
+	after *int64,
+	lastStatus *string,
+	send func(string, any) bool,
+) (*adminagent.AgentRun, bool) {
+	events, err := h.service.Events(ctx, runID, *after)
+	if err != nil {
+		send("stream_error", map[string]string{"message": "progress unavailable"})
+		return nil, false
+	}
+	for _, event := range events {
+		if !send("event", event) {
+			return nil, false
+		}
+		*after = event.Seq
+	}
+	updated, err := h.service.GetRun(ctx, runID)
+	if err != nil {
+		return nil, false
+	}
+	if updated.Status != *lastStatus {
+		*lastStatus = updated.Status
+		if !send("run", updated) {
+			return nil, false
+		}
+	}
+	return updated, true
 }
 
 func (h *AdminAgentHandler) runContext(c echo.Context) error {

@@ -1,6 +1,9 @@
-// Package adminagent owns administrator conversations with external coding
-// engines. The server stores durable conversations, runs, and an append-only
-// action log; execution happens on GitHub Actions, never on this host.
+// Package adminagent owns administrator conversations with the built-in agent
+// and with external coding engines. The server stores durable conversations,
+// runs, and an append-only action log. The built-in agent works through tools:
+// GitHub, GitHub Actions, the OpenPost API, and read-only production
+// inspection. Builds, tests, and coding-engine runs happen on GitHub Actions,
+// never on this host.
 package adminagent
 
 import (
@@ -9,11 +12,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/openpost/backend/internal/ai"
 	"github.com/uptrace/bun"
 )
 
@@ -66,6 +70,7 @@ var (
 	ErrInvalidEngine        = errors.New("unsupported engine")
 	ErrInvalidPrompt        = errors.New("prompt must contain between 1 and 20000 characters")
 	ErrInvalidCallback      = errors.New("invalid agent callback")
+	ErrRunActive            = errors.New("a run is already in progress in this conversation")
 )
 
 type AgentConversation struct {
@@ -81,12 +86,13 @@ type AgentConversation struct {
 
 type AgentMessage struct {
 	bun.BaseModel  `bun:"table:admin_agent_messages"`
-	ID             string    `bun:"id,pk" json:"id"`
-	ConversationID string    `bun:"conversation_id,notnull" json:"conversation_id"`
-	Role           string    `bun:"role,notnull" json:"role"`
-	Content        string    `bun:"content,notnull" json:"content"`
-	RunID          string    `bun:"run_id" json:"run_id,omitempty"`
-	CreatedAt      time.Time `bun:"created_at,notnull" json:"created_at"`
+	ID             string           `bun:"id,pk" json:"id"`
+	ConversationID string           `bun:"conversation_id,notnull" json:"conversation_id"`
+	Role           string           `bun:"role,notnull" json:"role"`
+	Content        string           `bun:"content,notnull" json:"content"`
+	RunID          string           `bun:"run_id" json:"run_id,omitempty"`
+	CreatedAt      time.Time        `bun:"created_at,notnull" json:"created_at"`
+	Attachments    []AttachmentInfo `bun:"-" json:"attachments,omitempty"`
 }
 
 type AgentRun struct {
@@ -96,6 +102,11 @@ type AgentRun struct {
 	Engine         string     `bun:"engine,notnull" json:"engine"`
 	Status         string     `bun:"status,notnull" json:"status"`
 	Prompt         string     `bun:"prompt,notnull" json:"prompt"`
+	Model          string     `bun:"model,notnull" json:"model,omitempty"`
+	Effort         string     `bun:"effort,notnull" json:"effort,omitempty"`
+	Access         string     `bun:"access,notnull" json:"access,omitempty"`
+	InputTokens    int64      `bun:"input_tokens,notnull" json:"input_tokens,omitempty"`
+	OutputTokens   int64      `bun:"output_tokens,notnull" json:"output_tokens,omitempty"`
 	BaseRevision   string     `bun:"base_revision,notnull" json:"base_revision,omitempty"`
 	Branch         string     `bun:"branch,notnull" json:"branch,omitempty"`
 	DispatchRef    string     `bun:"dispatch_ref,notnull" json:"dispatch_ref,omitempty"`
@@ -118,6 +129,24 @@ type AgentEvent struct {
 	AgentMessage  string    `bun:"message,notnull" json:"message"`
 	DataJSON      string    `bun:"data_json,notnull" json:"-"`
 	CreatedAt     time.Time `bun:"created_at,notnull" json:"created_at"`
+	// Data is the decoded DataJSON: a tool call's name, arguments, and result,
+	// or the model and access of a run. It is empty for plain progress events.
+	Data map[string]any `bun:"-" json:"data,omitempty" doc:"Structured details such as a tool call's name, arguments, and result"`
+}
+
+// decodeEventData fills Data from the stored JSON, so clients receive objects
+// rather than encoded strings. Unreadable or empty payloads stay empty.
+func decodeEventData(events []AgentEvent) {
+	for index := range events {
+		raw := strings.TrimSpace(events[index].DataJSON)
+		if raw == "" || raw == "{}" || raw == "null" {
+			continue
+		}
+		var data map[string]any
+		if json.Unmarshal([]byte(raw), &data) == nil && len(data) > 0 {
+			events[index].Data = data
+		}
+	}
 }
 
 type EngineStatus struct {
@@ -171,32 +200,26 @@ type Dispatcher interface {
 }
 
 type Service struct {
-	db         *bun.DB
-	dispatcher Dispatcher
-	assistant  *assistantRunner
-	now        func() time.Time
-}
-
-type assistantRunner struct {
-	generator ai.Generator
-	model     string
-	timeout   time.Duration
+	db          *bun.DB
+	dispatcher  Dispatcher
+	agent       *agentRunner
+	models      modelCatalog
+	github      *githubAPI
+	sessions    SessionIssuer
+	logs        LogSource
+	internalAPI http.Handler
+	env         Environment
+	specs       specCache
+	live        sync.Map
+	cancels     sync.Map
+	// finished holds one channel per run that is still working. It closes when
+	// the run's goroutine has made its last write.
+	finished sync.Map
+	now      func() time.Time
 }
 
 func NewService(db *bun.DB, dispatcher Dispatcher) *Service {
 	return &Service{db: db, dispatcher: dispatcher, now: time.Now}
-}
-
-// SetAssistant enables the built-in conversational engine. It shares the
-// instance's configured AI provider, so an OpenCode inference key makes the
-// chat usable without GitHub Actions or any coding-engine credential.
-func (s *Service) SetAssistant(generator ai.Generator, model string) {
-	model = strings.TrimSpace(model)
-	if generator == nil || model == "" {
-		s.assistant = nil
-		return
-	}
-	s.assistant = &assistantRunner{generator: generator, model: model, timeout: 4 * time.Minute}
 }
 
 // Engines reports dispatch readiness. Engine credentials live in GitHub Actions
@@ -207,24 +230,24 @@ func (s *Service) Engines() []EngineStatus {
 	if s.dispatcher == nil {
 		dispatchReason = "GitHub Actions dispatch is not configured"
 	}
-	assistantReason := ""
-	if s.assistant == nil {
-		assistantReason = "The built-in AI provider is not configured"
+	agentReason := ""
+	if s.agent == nil {
+		agentReason = "The built-in AI provider is not configured"
 	}
 	statuses := make([]EngineStatus, 0, 4)
 	statuses = append(statuses, EngineStatus{
 		ID:        EngineAssistant,
-		Label:     "OpenCode Assistant (built-in)",
-		Available: assistantReason == "",
-		Reason:    assistantReason,
+		Label:     "OpenPost Agent",
+		Available: agentReason == "",
+		Reason:    agentReason,
 	})
 	for _, engine := range []struct {
 		id    Engine
 		label string
 	}{
-		{EngineOpenCode, "OpenCode (GitHub Actions)"},
-		{EngineCodex, "Codex (GitHub Actions)"},
-		{EngineClaude, "Claude Code (GitHub Actions)"},
+		{EngineOpenCode, "OpenCode on GitHub Actions"},
+		{EngineCodex, "Codex on GitHub Actions"},
+		{EngineClaude, "Claude Code on GitHub Actions"},
 	} {
 		statuses = append(statuses, EngineStatus{
 			ID:        engine.id,
@@ -292,6 +315,9 @@ func (s *Service) GetConversation(ctx context.Context, id string) (*AgentConvers
 		Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list admin agent messages: %w", err)
 	}
+	if err := s.attachInfosToMessages(ctx, view.Messages); err != nil {
+		return nil, err
+	}
 	if err := s.db.NewSelect().Model(&view.Runs).
 		Where("conversation_id = ?", id).
 		OrderExpr("created_at ASC").
@@ -310,21 +336,134 @@ func (s *Service) GetConversation(ctx context.Context, id string) (*AgentConvers
 			Scan(ctx); err != nil {
 			return nil, fmt.Errorf("list admin agent events: %w", err)
 		}
+		decodeEventData(view.Events)
 	}
 	return view, nil
 }
 
-func (s *Service) StartRun(ctx context.Context, conversationID, prompt string) (*AgentRun, error) {
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" || len([]rune(prompt)) > MaxPromptCharacters {
+// DeleteConversation removes a conversation with its messages, runs, events,
+// and images. A conversation with a task in progress must be stopped first.
+func (s *Service) DeleteConversation(ctx context.Context, id string) error {
+	exists, err := s.db.NewSelect().Model((*AgentConversation)(nil)).Where("id = ?", id).Exists(ctx)
+	if err != nil {
+		return fmt.Errorf("load admin agent conversation: %w", err)
+	}
+	if !exists {
+		return ErrConversationNotFound
+	}
+	active, err := s.hasActiveRun(ctx, id)
+	if err != nil {
+		return err
+	}
+	if active {
+		return ErrRunActive
+	}
+	s.awaitRunsEnded(ctx, id)
+	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if _, err := tx.NewDelete().Model((*AgentEvent)(nil)).
+			Where("run_id IN (SELECT id FROM admin_agent_runs WHERE conversation_id = ?)", id).
+			Exec(ctx); err != nil {
+			return err
+		}
+		if _, err := tx.NewDelete().Model((*attachmentRow)(nil)).Where("conversation_id = ?", id).Exec(ctx); err != nil {
+			return err
+		}
+		if _, err := tx.NewDelete().Model((*AgentMessage)(nil)).Where("conversation_id = ?", id).Exec(ctx); err != nil {
+			return err
+		}
+		if _, err := tx.NewDelete().Model((*AgentRun)(nil)).Where("conversation_id = ?", id).Exec(ctx); err != nil {
+			return err
+		}
+		_, err := tx.NewDelete().Model((*AgentConversation)(nil)).Where("id = ?", id).Exec(ctx)
+		return err
+	}); err != nil {
+		return fmt.Errorf("delete admin agent conversation: %w", err)
+	}
+	return nil
+}
+
+// awaitRunsEnded gives the runs of a conversation a moment to make their last
+// writes. A stopped run reports as canceled at once, but its goroutine ends a
+// little later, and deleting rows underneath it would make those writes fail.
+func (s *Service) awaitRunsEnded(ctx context.Context, conversationID string) {
+	var runIDs []string
+	if err := s.db.NewSelect().Model((*AgentRun)(nil)).Column("id").
+		Where("conversation_id = ?", conversationID).Scan(ctx, &runIDs); err != nil {
+		return
+	}
+	grace := time.NewTimer(stopGrace)
+	defer grace.Stop()
+	for _, runID := range runIDs {
+		value, working := s.finished.Load(runID)
+		if !working {
+			continue
+		}
+		done, isChannel := value.(chan struct{})
+		if !isChannel {
+			continue
+		}
+		select {
+		case <-done:
+		case <-grace.C:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (s *Service) attachInfosToMessages(ctx context.Context, messages []AgentMessage) error {
+	ids := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if message.Role == "user" {
+			ids = append(ids, message.ID)
+		}
+	}
+	grouped, err := s.attachmentInfos(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for index := range messages {
+		messages[index].Attachments = grouped[messages[index].ID]
+	}
+	return nil
+}
+
+// StartRunInput describes one administrator message. Model, Effort, and Access
+// apply to the built-in agent; empty values use the defaults.
+type StartRunInput struct {
+	ConversationID string
+	UserID         string
+	Prompt         string
+	AttachmentIDs  []string
+	Model          string
+	Effort         string
+	Access         string
+}
+
+func (s *Service) StartRun(ctx context.Context, input StartRunInput) (*AgentRun, error) {
+	prompt := strings.TrimSpace(input.Prompt)
+	hasImages := len(input.AttachmentIDs) > 0
+	if (prompt == "" && !hasImages) || len([]rune(prompt)) > MaxPromptCharacters {
 		return nil, ErrInvalidPrompt
 	}
 	conversation := new(AgentConversation)
-	if err := s.db.NewSelect().Model(conversation).Where("id = ?", conversationID).Scan(ctx); err != nil {
+	if err := s.db.NewSelect().Model(conversation).Where("id = ?", input.ConversationID).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrConversationNotFound
 		}
 		return nil, fmt.Errorf("load admin agent conversation: %w", err)
+	}
+	active, err := s.hasActiveRun(ctx, conversation.ID)
+	if err != nil {
+		return nil, err
+	}
+	if active {
+		return nil, ErrRunActive
+	}
+	options, err := s.runOptions(conversation, input)
+	if err != nil {
+		return nil, err
 	}
 	now := s.now().UTC()
 	run := &AgentRun{
@@ -333,6 +472,9 @@ func (s *Service) StartRun(ctx context.Context, conversationID, prompt string) (
 		Engine:         conversation.Engine,
 		Status:         string(RunQueued),
 		Prompt:         prompt,
+		Model:          options.model,
+		Effort:         options.effort,
+		Access:         options.access,
 		CreatedAt:      now,
 	}
 	message := &AgentMessage{
@@ -343,35 +485,104 @@ func (s *Service) StartRun(ctx context.Context, conversationID, prompt string) (
 		RunID:          run.ID,
 		CreatedAt:      now,
 	}
-	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewInsert().Model(run).Exec(ctx); err != nil {
-			return err
+	if err := s.insertRun(ctx, conversation, run, message, input); err != nil {
+		if errors.Is(err, ErrAttachmentNotFound) || errors.Is(err, ErrTooManyAttachments) {
+			return nil, err
 		}
-		if _, err := tx.NewInsert().Model(message).Exec(ctx); err != nil {
-			return err
-		}
-		_, err := tx.NewUpdate().Model((*AgentConversation)(nil)).
-			Set("updated_at = ?", now).
-			Where("id = ?", conversation.ID).
-			Exec(ctx)
-		return err
-	}); err != nil {
 		return nil, fmt.Errorf("start admin agent run: %w", err)
 	}
 
 	return s.launchRun(ctx, conversation, run)
 }
 
+// hasActiveRun reports whether a task is still queued or working in the
+// conversation. One task runs at a time per conversation.
+func (s *Service) hasActiveRun(ctx context.Context, conversationID string) (bool, error) {
+	active, err := s.db.NewSelect().Model((*AgentRun)(nil)).
+		Where("conversation_id = ? AND status IN (?)", conversationID,
+			bun.List([]string{string(RunQueued), string(RunDispatched), string(RunRunning)})).
+		Exists(ctx)
+	if err != nil {
+		return false, fmt.Errorf("check admin agent runs: %w", err)
+	}
+	return active, nil
+}
+
+// insertRun stores the run, the user message, and its images together, so a
+// rejected image leaves neither a message nor a run behind. The first message
+// also names an untitled conversation.
+func (s *Service) insertRun(
+	ctx context.Context,
+	conversation *AgentConversation,
+	run *AgentRun,
+	message *AgentMessage,
+	input StartRunInput,
+) error {
+	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if _, err := tx.NewInsert().Model(run).Exec(ctx); err != nil {
+			return err
+		}
+		if _, err := tx.NewInsert().Model(message).Exec(ctx); err != nil {
+			return err
+		}
+		if err := bindAttachments(ctx, tx, input.UserID, conversation.ID, message.ID, input.AttachmentIDs); err != nil {
+			return err
+		}
+		update := tx.NewUpdate().Model((*AgentConversation)(nil)).
+			Set("updated_at = ?", run.CreatedAt).
+			Where("id = ?", conversation.ID)
+		if strings.TrimSpace(conversation.Title) == "" {
+			update = update.Set("title = ?", conversationTitle(run.Prompt))
+		}
+		_, err := update.Exec(ctx)
+		return err
+	})
+}
+
+type runSettings struct {
+	model  string
+	effort string
+	access string
+}
+
+// runOptions validates the per-message choices. They only matter for the
+// built-in agent, so Actions engines store the defaults.
+func (s *Service) runOptions(conversation *AgentConversation, input StartRunInput) (runSettings, error) {
+	access, err := normalizeAccess(input.Access)
+	if err != nil {
+		return runSettings{}, err
+	}
+	if Engine(conversation.Engine) != EngineAssistant {
+		return runSettings{access: access}, nil
+	}
+	model, err := s.models.resolve(input.Model)
+	if err != nil {
+		return runSettings{}, err
+	}
+	if _, err := normalizeEffort(input.Effort); err != nil {
+		return runSettings{}, err
+	}
+	return runSettings{model: model.ID, effort: strings.ToLower(strings.TrimSpace(input.Effort)), access: access}, nil
+}
+
+func conversationTitle(prompt string) string {
+	title := firstLine(prompt, 60)
+	if title == "" {
+		return "Image"
+	}
+	return title
+}
+
 func (s *Service) launchRun(ctx context.Context, conversation *AgentConversation, run *AgentRun) (*AgentRun, error) {
 	engine, _ := ParseEngine(conversation.Engine)
 	if engine == EngineAssistant {
-		return s.launchAssistant(ctx, run)
+		return s.launchAgent(ctx, run)
 	}
 	return s.launchDispatch(ctx, run, engine)
 }
 
-func (s *Service) launchAssistant(ctx context.Context, run *AgentRun) (*AgentRun, error) {
-	if s.assistant == nil {
+func (s *Service) launchAgent(ctx context.Context, run *AgentRun) (*AgentRun, error) {
+	if s.agent == nil {
 		if err := s.finishWithoutDispatch(ctx, run, "not_configured", "The built-in AI provider is not configured"); err != nil {
 			return nil, err
 		}
@@ -384,10 +595,11 @@ func (s *Service) launchAssistant(ctx context.Context, run *AgentRun) (*AgentRun
 		Column("status", "started_at").
 		Where("id = ?", run.ID).
 		Exec(ctx); err != nil {
-		return nil, fmt.Errorf("record assistant run: %w", err)
+		return nil, fmt.Errorf("record agent run: %w", err)
 	}
-	s.appendEvent(ctx, run.ID, "assistant-start", "progress", "The built-in assistant is thinking")
-	go s.executeAssistant(run.ID)
+	done := make(chan struct{})
+	s.finished.Store(run.ID, done)
+	go s.executeAgent(run.ID, done)
 	return run, nil
 }
 
@@ -474,6 +686,7 @@ func (s *Service) CancelRun(ctx context.Context, runID string) (*AgentRun, error
 		return nil, ErrRunTerminal
 	}
 	s.appendEvent(ctx, run.ID, "canceled", "status", "Canceled by an administrator")
+	s.cancelRunContext(run.ID)
 	return run, nil
 }
 
@@ -605,6 +818,7 @@ func (s *Service) Events(ctx context.Context, runID string, afterSeq int64) ([]A
 		Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list admin agent events: %w", err)
 	}
+	decodeEventData(events)
 	return events, nil
 }
 
@@ -617,156 +831,6 @@ func (s *Service) GetRun(ctx context.Context, runID string) (*AgentRun, error) {
 		return nil, fmt.Errorf("load admin agent run: %w", err)
 	}
 	return run, nil
-}
-
-// executeAssistant answers with the instance's configured AI provider. It runs
-// outside the request lifecycle so a closed browser does not lose the reply,
-// and it always records a terminal status or a truthful failure.
-func (s *Service) executeAssistant(runID string) {
-	assistant := s.assistant
-	if assistant == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), assistant.timeout)
-	defer cancel()
-
-	run, err := s.GetRun(ctx, runID)
-	if err != nil || RunStatus(run.Status).Terminal() {
-		return
-	}
-	conversation, err := s.GetConversation(ctx, run.ConversationID)
-	if err != nil {
-		s.failAssistantRun(ctx, runID, "assistant_unavailable", "The conversation could not be loaded")
-		return
-	}
-	snapshot := s.instanceSnapshot(ctx)
-	result, err := assistant.generator.Generate(ctx, ai.GenerateRequest{
-		Model:           assistant.model,
-		SystemPrompt:    assistantSystemPrompt(snapshot),
-		UserPrompt:      assistantTranscript(conversation.Messages),
-		MaxOutputTokens: 2000,
-	})
-	if err != nil {
-		code, message := classifyAssistantFailure(ctx, err)
-		s.failAssistantRun(ctx, runID, code, message)
-		return
-	}
-	text := strings.TrimSpace(result.Text)
-	if text == "" {
-		s.failAssistantRun(ctx, runID, "empty_response", "The built-in assistant returned an empty response")
-		return
-	}
-	if len([]rune(text)) > MaxSummaryCharacters {
-		text = string([]rune(text)[:MaxSummaryCharacters])
-	}
-
-	current, err := s.GetRun(ctx, runID)
-	if err != nil {
-		return
-	}
-	if RunStatus(current.Status) == RunCanceled {
-		s.appendEvent(context.Background(), runID, "assistant-late", "error",
-			"The assistant finished after the run was canceled")
-		return
-	}
-	now := s.now().UTC()
-	run.Status = string(RunSucceeded)
-	run.Summary = text
-	run.FinishedAt = &now
-	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewUpdate().Model(run).
-			Column("status", "summary", "finished_at").
-			Where("id = ?", run.ID).
-			Exec(ctx); err != nil {
-			return err
-		}
-		return upsertAssistantMessageTx(ctx, tx, run, now)
-	}); err != nil {
-		return
-	}
-	s.appendEvent(ctx, run.ID, "assistant-result", "result", "The assistant replied")
-}
-
-func (s *Service) failAssistantRun(ctx context.Context, runID, code, message string) {
-	current, err := s.GetRun(ctx, runID)
-	if err != nil {
-		return
-	}
-	if RunStatus(current.Status) == RunCanceled {
-		s.appendEvent(context.Background(), runID, "assistant-late", "error",
-			"The assistant reported a failure after the run was canceled")
-		return
-	}
-	now := s.now().UTC()
-	current.Status = string(RunFailed)
-	current.FailureCode = code
-	current.FailureMessage = message
-	current.FinishedAt = &now
-	if _, err := s.db.NewUpdate().Model(current).
-		Column("status", "failure_code", "failure_message", "finished_at").
-		Where("id = ?", current.ID).
-		Exec(ctx); err != nil {
-		return
-	}
-	s.appendEvent(ctx, runID, "assistant-failed-"+code, "error", message)
-}
-
-func assistantTranscript(messages []AgentMessage) string {
-	start := 0
-	if len(messages) > 20 {
-		start = len(messages) - 20
-	}
-	var builder strings.Builder
-	for _, message := range messages[start:] {
-		role := "Administrator"
-		if message.Role == "assistant" {
-			role = "Assistant"
-		}
-		builder.WriteString(role)
-		builder.WriteString(": ")
-		builder.WriteString(message.Content)
-		builder.WriteString("\n\n")
-	}
-	builder.WriteString("Reply to the latest Administrator message.")
-	return builder.String()
-}
-
-func assistantSystemPrompt(snapshot string) string {
-	return "You are the built-in OpenPost administrator assistant. Answer the administrator directly and truthfully. " +
-		"You can see only the snapshot and conversation below. You cannot execute code, change data, publish, or deploy in this mode. " +
-		"Coding and operational tasks run on GitHub Actions with a coding engine; say so when the request needs one. " +
-		"Never invent results, credentials, provider capabilities, or timestamps.\n\n" + snapshot
-}
-
-func (s *Service) instanceSnapshot(ctx context.Context) string {
-	count := func(table string) int {
-		var total int
-		_ = s.db.NewSelect().Table(table).ColumnExpr("COUNT(*)").Scan(ctx, &total)
-		return total
-	}
-	return fmt.Sprintf(
-		"Instance snapshot: %d users, %d workspaces, %d publications.",
-		count("users"), count("workspaces"), count("publications"),
-	)
-}
-
-func classifyAssistantFailure(ctx context.Context, err error) (string, string) {
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return "timeout", "The built-in assistant timed out"
-	}
-	if errors.Is(err, ai.ErrEmptyResponse) {
-		return "empty_response", "The built-in assistant returned an empty response"
-	}
-	var providerErr *ai.ProviderError
-	if errors.As(err, &providerErr) {
-		switch providerErr.StatusCode {
-		case 401, 403:
-			return "invalid_credentials", "The AI provider rejected the configured credentials"
-		case 429:
-			return "rate_limited", "The AI provider rate limited the request"
-		}
-	}
-	return "provider_error", "The built-in assistant request failed"
 }
 
 // FailInterrupted marks runs that were in flight when this process last

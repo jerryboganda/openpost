@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -132,7 +133,8 @@ func main() {
 		return
 	}
 
-	runtimeLogger := operationallogging.New(os.Stdout, "openpost", runningBuildRevision())
+	recentLogs := operationallogging.NewRecentLines(4000)
+	runtimeLogger := operationallogging.New(io.MultiWriter(os.Stdout, recentLogs), "openpost", runningBuildRevision())
 	log.SetFlags(0)
 	log.SetOutput(runtimeLogger.LegacyWriter())
 
@@ -690,6 +692,7 @@ func main() {
 	var imageGenerator ai.Generator
 	var decisionGenerator ai.Decider
 	var contentGenerator ai.Generator
+	var agentChat ai.ChatGenerator
 	if cfg.EffectiveAIAPIKey() != "" {
 		imageConfig, contentConfig := aiProviderConfigs(cfg)
 		imageGenerator, err = ai.NewOpenRouter(imageConfig)
@@ -700,6 +703,11 @@ func main() {
 		if err != nil {
 			fatalfWithDiagnostics(diagnosticsReporter, "failed to initialize AI text generator: %v", err)
 		}
+		chatClient, chatErr := ai.NewChatClient(contentConfig)
+		if chatErr != nil {
+			fatalfWithDiagnostics(diagnosticsReporter, "failed to initialize AI agent chat: %v", chatErr)
+		}
+		agentChat = chatClient
 		if contentConfig.Mode == ai.ProviderModeOpenRouter {
 			decisionConfig := contentConfig
 			decisionConfig.Provider = "typesafe"
@@ -916,7 +924,7 @@ func main() {
 		log.Printf("admin agent dispatch disabled: %v", err)
 	}
 	adminAgentService := adminagent.NewService(db, adminAgentDispatcher)
-	adminAgentService.SetAssistant(contentGenerator, cfg.EffectiveTextGenerationModel())
+	configureAdminAgent(adminAgentService, cfg, agentChat, recentLogs, agentSessionIssuer{db: db, sessions: sessionService, auth: authService})
 	if command.role.runsWeb() {
 		if count, err := adminAgentService.FailInterrupted(context.Background()); err != nil {
 			log.Printf("WARNING: failed to reconcile interrupted admin agent runs: %v", err)
@@ -1133,6 +1141,7 @@ func main() {
 		MCPHandler:                   mcpHandler,
 	})
 	apiroutes.FinalizeOpenAPIContract(api)
+	adminAgentService.SetInternalAPI(e)
 
 	RegisterSpaRoutes(e, db, cfg.PublicURL, cfg.Edition == config.EditionCloud, cfg.PublicProfilesEnabled)
 
