@@ -73,33 +73,31 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           engine="${{ steps.context.outputs.engine }}"
-          missing=""
+          available=true
+          failure_code=""
+          failure_message=""
           case "$engine" in
             opencode)
-              [ -z "${OPENCODE_API_KEY}${OPENAI_API_KEY}${ANTHROPIC_API_KEY}" ] && missing="OPENCODE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY"
+              [ -z "${OPENCODE_API_KEY}${OPENAI_API_KEY}${ANTHROPIC_API_KEY}" ] && { available=false; failure_code=missing_credentials; failure_message="The opencode engine is missing OPENCODE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY in GitHub Actions secrets."; }
               ;;
             codex)
-              [ -z "${OPENAI_API_KEY}" ] && missing="OPENAI_API_KEY"
+              [ -z "${OPENAI_API_KEY}" ] && { available=false; failure_code=missing_credentials; failure_message="The codex engine is missing OPENAI_API_KEY in GitHub Actions secrets."; }
               ;;
             claude)
-              [ -z "${ANTHROPIC_API_KEY}" ] && missing="ANTHROPIC_API_KEY"
+              [ -z "${ANTHROPIC_API_KEY}" ] && { available=false; failure_code=missing_credentials; failure_message="The claude engine is missing ANTHROPIC_API_KEY in GitHub Actions secrets."; }
               ;;
             *)
-              node scripts/agent-callback.mjs --status failed \
-                --failure-code unsupported_engine \
-                --failure-message "The requested engine is not supported."
-              echo "available=false" >> "$GITHUB_OUTPUT"
-              exit 0
+              available=false
+              failure_code=unsupported_engine
+              failure_message="The requested engine is not supported."
               ;;
           esac
-          if [ -n "$missing" ]; then
+          if [ "$available" = "false" ]; then
             node scripts/agent-callback.mjs --status failed \
-              --failure-code missing_credentials \
-              --failure-message "The ${engine} engine is missing ${missing} in GitHub Actions secrets."
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            exit 0
+              --failure-code "$failure_code" \
+              --failure-message "$failure_message"
           fi
-          echo "available=true" >> "$GITHUB_OUTPUT"
+          echo "available=$available" >> "$GITHUB_OUTPUT"
 
       - name: Announce the run
         if: steps.credentials.outputs.available == 'true'
@@ -152,38 +150,38 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          changed=false
+          url=""
           if git status --porcelain --untracked-files=all | grep -Eq '(^|/)\.env(\.local|\.production|\.development)?$'; then
             node scripts/agent-callback.mjs --status failed \
               --failure-code secret_detected \
               --failure-message "The engine produced an .env file; the change was not committed."
-            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          if [ -z "$(git status --porcelain)" ]; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          if [ -n "$(git status --porcelain)" ]; then
+            branch="agent/${OPENPOST_AGENT_RUN_ID}"
+            git config user.name "openpost-agent"
+            git config user.email "openpost-agent@users.noreply.github.com"
+            git checkout -b "$branch"
+            git add -A
+            git commit -m "agent: automated change for run ${OPENPOST_AGENT_RUN_ID}"
+            git push origin "$branch"
+            url="$(gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "agent: automated change for run ${OPENPOST_AGENT_RUN_ID}" \
+              --body "Automated change requested through the OpenPost administrator agent. Run: ${OPENPOST_AGENT_RUN_ID}. Repository checks run on this pull request; review the diff before merging.")"
+            changed=true
           fi
-          branch="agent/${OPENPOST_AGENT_RUN_ID}"
-          git config user.name "openpost-agent"
-          git config user.email "openpost-agent@users.noreply.github.com"
-          git checkout -b "$branch"
-          git add -A
-          git commit -m "agent: automated change for run ${OPENPOST_AGENT_RUN_ID}"
-          git push origin "$branch"
-          url="$(gh pr create \
-            --base main \
-            --head "$branch" \
-            --title "agent: automated change for run ${OPENPOST_AGENT_RUN_ID}" \
-            --body "Automated change requested through the OpenPost administrator agent. Run: ${OPENPOST_AGENT_RUN_ID}. Repository checks run on this pull request; review the diff before merging.")"
           {
-            echo "changed=true"
+            echo "changed=$changed"
             echo "url=${url}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Report the result
         if: always() && steps.credentials.outputs.available == 'true'
         run: |
-          if [ "${{ steps.engine.outcome }}" = "success" ]; then
+          if [ "${{ steps.engine.outcome }}" = "success" ] && [ "${{ steps.publish.outcome }}" != "failure" ]; then
             if [ "${{ steps.publish.outputs.changed }}" = "true" ]; then
               summary="Engine completed and opened a pull request: ${{ steps.publish.outputs.url }}. Repository checks run on that pull request."
             else
