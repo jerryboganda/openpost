@@ -129,6 +129,24 @@ type AgentEvent struct {
 	AgentMessage  string    `bun:"message,notnull" json:"message"`
 	DataJSON      string    `bun:"data_json,notnull" json:"-"`
 	CreatedAt     time.Time `bun:"created_at,notnull" json:"created_at"`
+	// Data is the decoded DataJSON: a tool call's name, arguments, and result,
+	// or the model and access of a run. It is empty for plain progress events.
+	Data map[string]any `bun:"-" json:"data,omitempty" doc:"Structured details such as a tool call's name, arguments, and result"`
+}
+
+// decodeEventData fills Data from the stored JSON, so clients receive objects
+// rather than encoded strings. Unreadable or empty payloads stay empty.
+func decodeEventData(events []AgentEvent) {
+	for index := range events {
+		raw := strings.TrimSpace(events[index].DataJSON)
+		if raw == "" || raw == "{}" || raw == "null" {
+			continue
+		}
+		var data map[string]any
+		if json.Unmarshal([]byte(raw), &data) == nil && len(data) > 0 {
+			events[index].Data = data
+		}
+	}
 }
 
 type EngineStatus struct {
@@ -315,6 +333,7 @@ func (s *Service) GetConversation(ctx context.Context, id string) (*AgentConvers
 			Scan(ctx); err != nil {
 			return nil, fmt.Errorf("list admin agent events: %w", err)
 		}
+		decodeEventData(view.Events)
 	}
 	return view, nil
 }
@@ -329,12 +348,9 @@ func (s *Service) DeleteConversation(ctx context.Context, id string) error {
 	if !exists {
 		return ErrConversationNotFound
 	}
-	active, err := s.db.NewSelect().Model((*AgentRun)(nil)).
-		Where("conversation_id = ? AND status IN (?)", id,
-			bun.List([]string{string(RunQueued), string(RunDispatched), string(RunRunning)})).
-		Exists(ctx)
+	active, err := s.hasActiveRun(ctx, id)
 	if err != nil {
-		return fmt.Errorf("check admin agent runs: %w", err)
+		return err
 	}
 	if active {
 		return ErrRunActive
@@ -404,12 +420,9 @@ func (s *Service) StartRun(ctx context.Context, input StartRunInput) (*AgentRun,
 		}
 		return nil, fmt.Errorf("load admin agent conversation: %w", err)
 	}
-	active, err := s.db.NewSelect().Model((*AgentRun)(nil)).
-		Where("conversation_id = ? AND status IN (?)", conversation.ID,
-			bun.List([]string{string(RunQueued), string(RunDispatched), string(RunRunning)})).
-		Exists(ctx)
+	active, err := s.hasActiveRun(ctx, conversation.ID)
 	if err != nil {
-		return nil, fmt.Errorf("check admin agent runs: %w", err)
+		return nil, err
 	}
 	if active {
 		return nil, ErrRunActive
@@ -438,7 +451,40 @@ func (s *Service) StartRun(ctx context.Context, input StartRunInput) (*AgentRun,
 		RunID:          run.ID,
 		CreatedAt:      now,
 	}
-	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+	if err := s.insertRun(ctx, conversation, run, message, input); err != nil {
+		if errors.Is(err, ErrAttachmentNotFound) || errors.Is(err, ErrTooManyAttachments) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("start admin agent run: %w", err)
+	}
+
+	return s.launchRun(ctx, conversation, run)
+}
+
+// hasActiveRun reports whether a task is still queued or working in the
+// conversation. One task runs at a time per conversation.
+func (s *Service) hasActiveRun(ctx context.Context, conversationID string) (bool, error) {
+	active, err := s.db.NewSelect().Model((*AgentRun)(nil)).
+		Where("conversation_id = ? AND status IN (?)", conversationID,
+			bun.List([]string{string(RunQueued), string(RunDispatched), string(RunRunning)})).
+		Exists(ctx)
+	if err != nil {
+		return false, fmt.Errorf("check admin agent runs: %w", err)
+	}
+	return active, nil
+}
+
+// insertRun stores the run, the user message, and its images together, so a
+// rejected image leaves neither a message nor a run behind. The first message
+// also names an untitled conversation.
+func (s *Service) insertRun(
+	ctx context.Context,
+	conversation *AgentConversation,
+	run *AgentRun,
+	message *AgentMessage,
+	input StartRunInput,
+) error {
+	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewInsert().Model(run).Exec(ctx); err != nil {
 			return err
 		}
@@ -449,21 +495,14 @@ func (s *Service) StartRun(ctx context.Context, input StartRunInput) (*AgentRun,
 			return err
 		}
 		update := tx.NewUpdate().Model((*AgentConversation)(nil)).
-			Set("updated_at = ?", now).
+			Set("updated_at = ?", run.CreatedAt).
 			Where("id = ?", conversation.ID)
 		if strings.TrimSpace(conversation.Title) == "" {
-			update = update.Set("title = ?", conversationTitle(prompt))
+			update = update.Set("title = ?", conversationTitle(run.Prompt))
 		}
 		_, err := update.Exec(ctx)
 		return err
-	}); err != nil {
-		if errors.Is(err, ErrAttachmentNotFound) || errors.Is(err, ErrTooManyAttachments) {
-			return nil, err
-		}
-		return nil, fmt.Errorf("start admin agent run: %w", err)
-	}
-
-	return s.launchRun(ctx, conversation, run)
+	})
 }
 
 type runSettings struct {
@@ -743,6 +782,7 @@ func (s *Service) Events(ctx context.Context, runID string, afterSeq int64) ([]A
 		Scan(ctx); err != nil {
 		return nil, fmt.Errorf("list admin agent events: %w", err)
 	}
+	decodeEventData(events)
 	return events, nil
 }
 

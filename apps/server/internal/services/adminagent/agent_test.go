@@ -165,7 +165,7 @@ func TestAgentAnswersAndPersistsTranscript(t *testing.T) {
 	require.Equal(t, "assistant", view.Messages[1].Role)
 	require.Equal(t, "The instance has three publications.", view.Messages[1].Content)
 
-	var kinds []string
+	kinds := make([]string, 0, len(view.Events))
 	var textEvents []AgentEvent
 	for _, event := range view.Events {
 		kinds = append(kinds, event.Kind)
@@ -237,6 +237,8 @@ func TestAgentRunsToolsAndReturnsResultsToTheModel(t *testing.T) {
 	require.Equal(t, eventData(t, *call)["key"], eventData(t, *result)["key"], "call and result pair by key")
 	require.Equal(t, true, eventData(t, *result)["ok"])
 	require.Contains(t, eventData(t, *result)["output"], "OpenPost production status")
+	require.Equal(t, "prod_status", call.Data["name"], "clients receive the structured details, not only the stored JSON")
+	require.Equal(t, true, result.Data["ok"])
 }
 
 func TestAgentTellsTheModelAboutToolFailuresSoItCanRecover(t *testing.T) {

@@ -9,12 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	// Registers the GIF decoder so uploads can be measured before use.
-	_ "image/gif"
-	// Registers the JPEG decoder so uploads can be measured before use.
-	_ "image/jpeg"
-	// Registers the PNG decoder so uploads can be measured before use.
-	_ "image/png"
+	_ "image/gif"  // register GIF decoding so uploads are measured before use
+	_ "image/jpeg" // register JPEG decoding so uploads are measured before use
+	_ "image/png"  // register PNG decoding so uploads are measured before use
 	"net/http"
 	"path"
 	"strings"
@@ -23,8 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/uptrace/bun"
-	// Registers the WebP decoder so uploads can be measured before use.
-	_ "golang.org/x/image/webp"
+	_ "golang.org/x/image/webp" // register WebP decoding so uploads are measured before use
 )
 
 const (

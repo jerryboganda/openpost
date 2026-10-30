@@ -1,10 +1,12 @@
 name: Fork Quick Check
 
 # Fork-only fast feedback for feature, fix, and agent branches. It runs the Go
-# build, vet, lint, and focused tests, plus the web lint and type check, in a
-# few minutes instead of the roughly 40 minutes of the full pull request checks.
-# The full checks still gate every merge. The administrator agent starts this
-# workflow by pushing to an agent/* branch and reads the result with ci_status.
+# build, vet, lint, and focused tests, plus the web lint, type check, and agent
+# unit tests, in a few minutes instead of the roughly 40 minutes of the full
+# pull request checks. The jobs run in parallel and every step reports even when
+# an earlier step failed, so one run shows every problem. The full checks still
+# gate every merge. The administrator agent starts this workflow by pushing to
+# an agent/* branch and reads the result with ci_status.
 on:
   push:
     branches:
@@ -30,8 +32,39 @@ env:
   BUN_VERSION: "1.3.11"
 
 jobs:
-  backend:
-    name: Backend build, lint, and focused tests
+  backend-test:
+    name: Backend build and focused tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.ref || github.sha }}
+          sparse-checkout: |
+            /*
+            !/apps/web/static/image-editor-models/
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: apps/server/go.sum
+      # The dev tag serves the web app from disk, so the Go checks do not need
+      # the embedded frontend build.
+      - name: Build and vet
+        working-directory: apps/server
+        run: |
+          go build -tags dev ./...
+          go vet -tags dev ./internal/ai/... ./internal/services/adminagent/... ./internal/api/... ./internal/operational/... ./cmd/...
+      - name: Focused tests
+        if: ${{ !cancelled() }}
+        working-directory: apps/server
+        run: |
+          go test ./internal/ai/... ./internal/services/adminagent/... ./internal/operational/...
+          go test ./internal/api
+          go test ./internal/api/handlers -run 'AdminAgent|AIDiagnostic'
+
+  backend-lint:
+    name: Backend lint
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -54,25 +87,12 @@ jobs:
       - name: Format the Go sources
         working-directory: apps/server
         run: gofmt -w .
-      # The dev tag serves the web app from disk, so the Go checks do not need
-      # the embedded frontend build.
-      - name: Build and vet
-        working-directory: apps/server
-        run: |
-          go build -tags dev ./...
-          go vet -tags dev ./internal/ai/... ./internal/services/adminagent/... ./internal/api/... ./internal/operational/... ./cmd/...
       - name: Lint
         working-directory: apps/server
         run: golangci-lint run --build-tags dev ./internal/ai/... ./internal/services/adminagent/... ./internal/api/... ./internal/operational/... ./cmd/...
-      - name: Focused tests
-        working-directory: apps/server
-        run: |
-          go test ./internal/ai/... ./internal/services/adminagent/... ./internal/operational/...
-          go test ./internal/api
-          go test ./internal/api/handlers -run 'AdminAgent|AIDiagnostic'
 
   web:
-    name: Web lint and type check
+    name: Web lint, type check, and unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -94,4 +114,12 @@ jobs:
       - name: Lint
         run: bun run lint -- frontend
       - name: Type check
+        if: ${{ !cancelled() }}
         run: bun run check -- frontend
+      - name: Query and unit tests
+        if: ${{ !cancelled() }}
+        run: |
+          bun scripts/check-query-migration.mjs
+          cd apps/web
+          bun run generate:i18n
+          bun run test:server src/lib/agent

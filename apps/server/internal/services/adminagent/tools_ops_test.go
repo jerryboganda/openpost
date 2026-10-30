@@ -124,7 +124,7 @@ type fakeIssuer struct {
 	revoked int
 }
 
-func (f *fakeIssuer) IssueSession(_ context.Context, userID string, ttl time.Duration) (string, func(context.Context), error) {
+func (f *fakeIssuer) IssueSession(_ context.Context, userID string, _ time.Duration) (string, func(context.Context), error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.issued++
@@ -301,6 +301,7 @@ func TestAPICallRefusesControlEndpointsSecurityChangesAndReadOnlyWrites(t *testi
 		{"backup restore", map[string]any{"method": "POST", "path": "/admin/backup/restore"}, "instance settings"},
 		{"full URLs", map[string]any{"path": "https://evil.example/x"}, "not a full URL"},
 		{"path traversal", map[string]any{"path": "/workspaces/../admin"}, "not valid"},
+		{"encoded path traversal", map[string]any{"path": "/workspaces/%2e%2e/admin"}, "not valid"},
 		{"empty path", map[string]any{"path": " "}, "path is required"},
 		{"unknown method", map[string]any{"method": "TRACE", "path": "/workspaces"}, "method must be"},
 	}
@@ -321,6 +322,14 @@ func TestAPICallRefusesControlEndpointsSecurityChangesAndReadOnlyWrites(t *testi
 	require.Contains(t, output, "read-only")
 	_, ok = readOnly.call("api_call", map[string]any{"path": "/workspaces"})
 	require.True(t, ok, "reading stays available")
+}
+
+func TestAPICallKeepsTheCheckedPathAsTheRequestedPath(t *testing.T) {
+	harness := newAPIHarness(t, AccessFull, "admin")
+	output, ok := harness.call("api_call", map[string]any{"path": "/workspaces/a%252e%252e/x"})
+	require.True(t, ok, output)
+	require.Len(t, harness.requests("/api/v1/workspaces/a%2e%2e/x"), 1,
+		"an encoded dot segment reaches the router as text and is never decoded into a traversal")
 }
 
 func TestAPICallRequiresThatTheConversationOwnerIsStillAnAdministrator(t *testing.T) {

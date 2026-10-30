@@ -254,25 +254,10 @@ func (operation apiOperation) line() string {
 // read: optional fields end in ?, and nesting stops at a fixed depth.
 func (sp *apiSpec) typeText(schema map[string]any, depth int, seen map[string]bool, indent string) string {
 	if ref, ok := schema["$ref"].(string); ok {
-		name := ref[strings.LastIndex(ref, "/")+1:]
-		resolved, _ := sp.schemas[name].(map[string]any)
-		if resolved == nil || seen[name] || depth <= 0 {
-			return name
-		}
-		seen[name] = true
-		defer delete(seen, name)
-		return sp.typeText(resolved, depth, seen, indent)
+		return sp.refText(ref, depth, seen, indent)
 	}
-	for _, key := range []string{"oneOf", "anyOf"} {
-		if options, ok := schema[key].([]any); ok {
-			names := make([]string, 0, len(options))
-			for _, option := range options {
-				if mapped, ok := option.(map[string]any); ok {
-					names = append(names, sp.typeText(mapped, 0, seen, indent))
-				}
-			}
-			return strings.Join(names, " | ")
-		}
+	if names := sp.unionNames(schema, seen, indent); names != nil {
+		return strings.Join(names, " | ")
 	}
 	switch schema["type"] {
 	case "array":
@@ -281,6 +266,42 @@ func (sp *apiSpec) typeText(schema map[string]any, depth int, seen map[string]bo
 	case "object":
 		return sp.objectText(schema, depth, seen, indent)
 	}
+	return scalarText(schema)
+}
+
+// refText expands a referenced schema once. A cycle, an unknown name, or the
+// depth limit leaves the bare schema name.
+func (sp *apiSpec) refText(ref string, depth int, seen map[string]bool, indent string) string {
+	name := ref[strings.LastIndex(ref, "/")+1:]
+	resolved, _ := sp.schemas[name].(map[string]any)
+	if resolved == nil || seen[name] || depth <= 0 {
+		return name
+	}
+	seen[name] = true
+	defer delete(seen, name)
+	return sp.typeText(resolved, depth, seen, indent)
+}
+
+// unionNames lists the alternatives of a oneOf or anyOf schema by name, or
+// returns nil when the schema is not a union.
+func (sp *apiSpec) unionNames(schema map[string]any, seen map[string]bool, indent string) []string {
+	for _, key := range []string{"oneOf", "anyOf"} {
+		options, ok := schema[key].([]any)
+		if !ok {
+			continue
+		}
+		names := make([]string, 0, len(options))
+		for _, option := range options {
+			if mapped, isMap := option.(map[string]any); isMap {
+				names = append(names, sp.typeText(mapped, 0, seen, indent))
+			}
+		}
+		return names
+	}
+	return nil
+}
+
+func scalarText(schema map[string]any) string {
 	text, _ := schema["type"].(string)
 	if text == "" {
 		text = "any"
@@ -446,21 +467,29 @@ func apiTarget(raw, method string) (string, error) {
 	if path != apiBasePath && !strings.HasPrefix(path, apiBasePath+"/") {
 		path = apiBasePath + "/" + strings.TrimLeft(path, "/")
 	}
+	if err := checkAPIPath(path, method); err != nil {
+		return "", err
+	}
+	// Re-encoding keeps the request path identical to the path that was checked.
+	target := url.URL{Path: path, RawQuery: parsed.RawQuery}
+	return target.String(), nil
+}
+
+// checkAPIPath keeps the agent away from its own control endpoints and from
+// account security and backup changes, which belong to the administrator.
+func checkAPIPath(path, method string) error {
 	lower := strings.ToLower(path)
 	switch {
 	case strings.Contains(path, "..") || strings.Contains(path, "//"):
-		return "", errors.New("path is not valid")
+		return errors.New("path is not valid")
 	case lower == apiBasePath+"/admin/agent" || strings.HasPrefix(lower, apiBasePath+"/admin/agent/"):
-		return "", errors.New("the agent cannot call its own control endpoints")
+		return errors.New("the agent cannot call its own control endpoints")
 	case method != http.MethodGet && strings.HasPrefix(lower, apiBasePath+"/auth/"):
-		return "", errors.New("sign-in, password, and security settings cannot be changed by the agent")
+		return errors.New("sign-in, password, and security settings cannot be changed by the agent")
 	case method != http.MethodGet && strings.Contains(lower, "backup"):
-		return "", errors.New("backups and restores are run from the instance settings page")
+		return errors.New("backups and restores are run from the instance settings page")
 	}
-	if parsed.RawQuery != "" {
-		path += "?" + parsed.RawQuery
-	}
-	return path, nil
+	return nil
 }
 
 func (s *Service) callAPI(ctx context.Context, rt *toolRuntime, args toolArgs) (string, error) {
