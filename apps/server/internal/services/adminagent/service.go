@@ -532,7 +532,7 @@ func callbackBlocked(run *AgentRun, status RunStatus) bool {
 	if !RunStatus(run.Status).Terminal() {
 		return false
 	}
-	return !(run.Status == string(RunFailed) && run.FailureCode == "interrupted" && status.Terminal())
+	return run.Status != string(RunFailed) || run.FailureCode != "interrupted" || !status.Terminal()
 }
 
 func applyAgentCallbackFields(run *AgentRun, status RunStatus, callback AgentCallback, now time.Time) {
