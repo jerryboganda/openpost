@@ -33,7 +33,7 @@ func (d *agentTestDispatcher) Cancel(_ context.Context, run adminagent.AgentRun)
 	return nil
 }
 
-func newAdminAgentTestServer(t *testing.T, isAdmin bool, dispatcher *agentTestDispatcher) (*echo.Echo, *adminagent.Service, *AdminAgentHandler) {
+func newAdminAgentTestServer(t *testing.T, isAdmin bool, dispatcher *agentTestDispatcher) (*echo.Echo, *adminagent.Service) {
 	t.Helper()
 	db := createHandlerTestDB(t, (*models.User)(nil))
 	_, err := db.NewInsert().Model(&models.User{
@@ -52,7 +52,7 @@ func newAdminAgentTestServer(t *testing.T, isAdmin bool, dispatcher *agentTestDi
 	api := humaecho.NewWithGroup(e, e.Group("/api/v1"), huma.DefaultConfig("Test", "1.0.0"))
 	handler.RegisterRoutes(api)
 	handler.RegisterEchoRoutes(e)
-	return e, service, handler
+	return e, service
 }
 
 func requestAgent(t *testing.T, e *echo.Echo, method, path string, body any) *httptest.ResponseRecorder {
@@ -73,14 +73,14 @@ func requestAgent(t *testing.T, e *echo.Echo, method, path string, body any) *ht
 
 func TestAdminAgentAuthorizationAndConversationFlow(t *testing.T) {
 	t.Run("ordinary user cannot list conversations", func(t *testing.T) {
-		e, _, _ := newAdminAgentTestServer(t, false, &agentTestDispatcher{})
+		e, _ := newAdminAgentTestServer(t, false, &agentTestDispatcher{})
 		response := requestAgent(t, e, http.MethodGet, "/api/v1/admin/agent/conversations", nil)
 		require.Equal(t, http.StatusForbidden, response.Code)
 	})
 
 	t.Run("api token cannot use the administrator agent", func(t *testing.T) {
-		e, _, _ := newAdminAgentTestServer(t, true, &agentTestDispatcher{})
-		request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/agent/conversations", nil)
+		e, _ := newAdminAgentTestServer(t, true, &agentTestDispatcher{})
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/admin/agent/conversations", nil)
 		request.Header.Set("Authorization", "Bearer bad-token")
 		recorder := httptest.NewRecorder()
 		e.ServeHTTP(recorder, request)
@@ -89,7 +89,7 @@ func TestAdminAgentAuthorizationAndConversationFlow(t *testing.T) {
 
 	t.Run("admin creates a conversation and starts a run", func(t *testing.T) {
 		dispatcher := &agentTestDispatcher{}
-		e, service, _ := newAdminAgentTestServer(t, true, dispatcher)
+		e, service := newAdminAgentTestServer(t, true, dispatcher)
 
 		created := requestAgent(t, e, http.MethodPost, "/api/v1/admin/agent/conversations", map[string]string{
 			"engine": "opencode",
@@ -122,7 +122,7 @@ func TestAdminAgentAuthorizationAndConversationFlow(t *testing.T) {
 	})
 
 	t.Run("unknown engine is rejected", func(t *testing.T) {
-		e, _, _ := newAdminAgentTestServer(t, true, &agentTestDispatcher{})
+		e, _ := newAdminAgentTestServer(t, true, &agentTestDispatcher{})
 		response := requestAgent(t, e, http.MethodPost, "/api/v1/admin/agent/conversations", map[string]string{
 			"engine": "shell",
 		})
@@ -132,7 +132,7 @@ func TestAdminAgentAuthorizationAndConversationFlow(t *testing.T) {
 
 func TestAdminAgentCallbackAndStream(t *testing.T) {
 	dispatcher := &agentTestDispatcher{}
-	e, service, _ := newAdminAgentTestServer(t, true, dispatcher)
+	e, service := newAdminAgentTestServer(t, true, dispatcher)
 	conversation, err := service.CreateConversation(t.Context(), "user-1", "", "", adminagent.EngineCodex)
 	require.NoError(t, err)
 	run, err := service.StartRun(t.Context(), conversation.ID, "Ship the change.")
@@ -151,7 +151,7 @@ func TestAdminAgentCallbackAndStream(t *testing.T) {
 	timestamp := time.Now().UTC().Format(time.RFC3339)
 	signature := adminagent.SignCallback("callback-secret", timestamp, body)
 
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/agent/callback", bytes.NewReader(body))
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/admin/agent/callback", bytes.NewReader(body))
 	request.Header.Set(adminagent.CallbackTimestampHeader, timestamp)
 	request.Header.Set(adminagent.CallbackSignatureHeader, signature)
 	recorder := httptest.NewRecorder()
@@ -163,7 +163,7 @@ func TestAdminAgentCallbackAndStream(t *testing.T) {
 	require.Equal(t, "succeeded", stored.Status)
 	require.Equal(t, "Opened a pull request and reported the checks.", stored.Summary)
 
-	forged := httptest.NewRequest(http.MethodPost, "/api/v1/admin/agent/callback", bytes.NewReader(body))
+	forged := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/admin/agent/callback", bytes.NewReader(body))
 	forged.Header.Set(adminagent.CallbackTimestampHeader, timestamp)
 	forged.Header.Set(adminagent.CallbackSignatureHeader, "sha256=deadbeef")
 	forgedRecorder := httptest.NewRecorder()

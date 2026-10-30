@@ -127,12 +127,12 @@ func (d *GitHubDispatcher) Cancel(ctx context.Context, run AgentRun) error {
 			return err
 		}
 		defer cancelResponse.Body.Close()
-		if cancelResponse.StatusCode != http.StatusAccepted && cancelResponse.StatusCode != http.StatusConflict {
+		if cancelResponse.StatusCode != http.StatusAccepted {
 			return fmt.Errorf("GitHub Actions cancel failed with status %d", cancelResponse.StatusCode)
 		}
 		return nil
 	}
-	return nil
+	return fmt.Errorf("GitHub Actions run %s is not visible for cancellation yet", run.ID)
 }
 
 func (d *GitHubDispatcher) do(ctx context.Context, method, url string, body []byte) (*http.Response, error) {

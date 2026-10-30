@@ -168,6 +168,40 @@ func TestCancelStopsFurtherStatusChanges(t *testing.T) {
 	require.ErrorIs(t, err, ErrRunTerminal)
 }
 
+func TestCancellationFailureKeepsRunActive(t *testing.T) {
+	ctx := context.Background()
+	dispatcher := &fakeDispatcher{cancelErr: errors.New("GitHub run not visible yet")}
+	service := NewService(adminAgentTestDB(t), dispatcher)
+	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineCodex)
+	require.NoError(t, err)
+	run, err := service.StartRun(ctx, conversation.ID, "Inspect the code.")
+	require.NoError(t, err)
+
+	_, err = service.CancelRun(ctx, run.ID)
+	require.ErrorContains(t, err, "not visible yet")
+	stored, err := service.GetRun(ctx, run.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(RunDispatched), stored.Status)
+	require.Nil(t, stored.FinishedAt)
+}
+
+func TestCompletedRunIgnoresDelayedCallbacks(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(adminAgentTestDB(t), &fakeDispatcher{})
+	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineClaude)
+	require.NoError(t, err)
+	run, err := service.StartRun(ctx, conversation.ID, "Check the change.")
+	require.NoError(t, err)
+	_, err = service.ApplyCallback(ctx, AgentCallback{RunID: run.ID, Status: string(RunSucceeded), Summary: "Verified."})
+	require.NoError(t, err)
+	for _, status := range []RunStatus{RunRunning, RunFailed} {
+		late, err := service.ApplyCallback(ctx, AgentCallback{RunID: run.ID, Status: string(status), Summary: "Stale result."})
+		require.NoError(t, err)
+		require.Equal(t, string(RunSucceeded), late.Status)
+		require.Equal(t, "Verified.", late.Summary)
+	}
+}
+
 func TestInterruptedRunsAreRecoverableAndCorrectable(t *testing.T) {
 	ctx := context.Background()
 	db := adminAgentTestDB(t)

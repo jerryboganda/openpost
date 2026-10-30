@@ -305,7 +305,7 @@ func (s *Service) GetConversation(ctx context.Context, id string) (*AgentConvers
 	view.Events = make([]AgentEvent, 0)
 	if len(runIDs) > 0 {
 		if err := s.db.NewSelect().Model(&view.Events).
-			Where("run_id IN (?)", bun.In(runIDs)).
+			Where("run_id IN (?)", bun.List(runIDs)).
 			OrderExpr("created_at ASC, seq ASC").
 			Scan(ctx); err != nil {
 			return nil, fmt.Errorf("list admin agent events: %w", err)
@@ -359,27 +359,39 @@ func (s *Service) StartRun(ctx context.Context, conversationID, prompt string) (
 		return nil, fmt.Errorf("start admin agent run: %w", err)
 	}
 
+	return s.launchRun(ctx, conversation, run)
+}
+
+func (s *Service) launchRun(ctx context.Context, conversation *AgentConversation, run *AgentRun) (*AgentRun, error) {
 	engine, _ := ParseEngine(conversation.Engine)
 	if engine == EngineAssistant {
-		if s.assistant == nil {
-			if err := s.finishWithoutDispatch(ctx, run, "not_configured", "The built-in AI provider is not configured"); err != nil {
-				return nil, err
-			}
-			return run, nil
+		return s.launchAssistant(ctx, run)
+	}
+	return s.launchDispatch(ctx, run, engine)
+}
+
+func (s *Service) launchAssistant(ctx context.Context, run *AgentRun) (*AgentRun, error) {
+	if s.assistant == nil {
+		if err := s.finishWithoutDispatch(ctx, run, "not_configured", "The built-in AI provider is not configured"); err != nil {
+			return nil, err
 		}
-		started := s.now().UTC()
-		run.Status = string(RunRunning)
-		run.StartedAt = &started
-		if _, err := s.db.NewUpdate().Model(run).
-			Column("status", "started_at").
-			Where("id = ?", run.ID).
-			Exec(ctx); err != nil {
-			return nil, fmt.Errorf("record assistant run: %w", err)
-		}
-		s.appendEvent(ctx, run.ID, "assistant-start", "progress", "The built-in assistant is thinking", nil)
-		go s.executeAssistant(run.ID)
 		return run, nil
 	}
+	started := s.now().UTC()
+	run.Status = string(RunRunning)
+	run.StartedAt = &started
+	if _, err := s.db.NewUpdate().Model(run).
+		Column("status", "started_at").
+		Where("id = ?", run.ID).
+		Exec(ctx); err != nil {
+		return nil, fmt.Errorf("record assistant run: %w", err)
+	}
+	s.appendEvent(ctx, run.ID, "assistant-start", "progress", "The built-in assistant is thinking")
+	go s.executeAssistant(run.ID)
+	return run, nil
+}
+
+func (s *Service) launchDispatch(ctx context.Context, run *AgentRun, engine Engine) (*AgentRun, error) {
 	if s.dispatcher == nil {
 		if err := s.finishWithoutDispatch(ctx, run, "not_configured", "GitHub Actions dispatch is not configured"); err != nil {
 			return nil, err
@@ -409,7 +421,7 @@ func (s *Service) StartRun(ctx context.Context, conversationID, prompt string) (
 		Exec(ctx); err != nil {
 		return nil, fmt.Errorf("record admin agent dispatch: %w", err)
 	}
-	s.appendEvent(ctx, run.ID, "dispatch", "dispatch", "Dispatched to GitHub Actions", nil)
+	s.appendEvent(ctx, run.ID, "dispatch", "dispatch", "Dispatched to GitHub Actions")
 	return run, nil
 }
 
@@ -425,7 +437,7 @@ func (s *Service) finishWithoutDispatch(ctx context.Context, run *AgentRun, code
 		Exec(ctx); err != nil {
 		return fmt.Errorf("record admin agent dispatch failure: %w", err)
 	}
-	s.appendEvent(ctx, run.ID, code, "error", message, nil)
+	s.appendEvent(ctx, run.ID, code, "error", message)
 	return nil
 }
 
@@ -440,46 +452,90 @@ func (s *Service) CancelRun(ctx context.Context, runID string) (*AgentRun, error
 	if RunStatus(run.Status).Terminal() {
 		return run, ErrRunTerminal
 	}
-	if s.dispatcher != nil {
-		_ = s.dispatcher.Cancel(ctx, *run)
+	if Engine(run.Engine) != EngineAssistant {
+		if s.dispatcher == nil {
+			return nil, errors.New("GitHub Actions cancellation is not configured")
+		}
+		if err := s.dispatcher.Cancel(ctx, *run); err != nil {
+			return nil, fmt.Errorf("cancel GitHub Actions run: %w", err)
+		}
 	}
 	now := s.now().UTC()
 	run.Status = string(RunCanceled)
 	run.FinishedAt = &now
-	if _, err := s.db.NewUpdate().Model(run).
+	result, err := s.db.NewUpdate().Model(run).
 		Column("status", "finished_at").
-		Where("id = ?", run.ID).
-		Exec(ctx); err != nil {
+		Where("id = ? AND status IN (?)", run.ID, bun.List([]string{string(RunQueued), string(RunDispatched), string(RunRunning)})).
+		Exec(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("cancel admin agent run: %w", err)
 	}
-	s.appendEvent(ctx, run.ID, "canceled", "status", "Canceled by an administrator", nil)
+	if affected, err := result.RowsAffected(); err != nil || affected == 0 {
+		return nil, ErrRunTerminal
+	}
+	s.appendEvent(ctx, run.ID, "canceled", "status", "Canceled by an administrator")
 	return run, nil
 }
 
 func (s *Service) ApplyCallback(ctx context.Context, callback AgentCallback) (*AgentRun, error) {
+	status, err := validateAgentCallback(&callback)
+	if err != nil {
+		return nil, err
+	}
+	run, err := s.loadAgentRun(ctx, callback.RunID)
+	if err != nil {
+		return nil, err
+	}
+	if RunStatus(run.Status) == RunCanceled {
+		s.appendEvent(ctx, run.ID, "late-result", "error",
+			"The engine reported a result after the run was canceled")
+		return run, nil
+	}
+	if callbackBlocked(run, status) {
+		return run, nil
+	}
+	now := s.now().UTC()
+	applyAgentCallbackFields(run, status, callback, now)
+	if err := s.persistAgentCallback(ctx, run, callback, now); err != nil {
+		return nil, err
+	}
+	return run, nil
+}
+
+func validateAgentCallback(callback *AgentCallback) (RunStatus, error) {
 	callback.RunID = strings.TrimSpace(callback.RunID)
 	callback.Status = strings.TrimSpace(callback.Status)
 	if callback.RunID == "" {
-		return nil, ErrInvalidCallback
+		return "", ErrInvalidCallback
 	}
 	status := RunStatus(callback.Status)
 	if status != RunRunning && status != RunSucceeded && status != RunFailed {
-		return nil, ErrInvalidCallback
+		return "", ErrInvalidCallback
 	}
+	return status, nil
+}
+
+func (s *Service) loadAgentRun(ctx context.Context, runID string) (*AgentRun, error) {
 	run := new(AgentRun)
-	if err := s.db.NewSelect().Model(run).Where("id = ?", callback.RunID).Scan(ctx); err != nil {
+	if err := s.db.NewSelect().Model(run).Where("id = ?", runID).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrRunNotFound
 		}
 		return nil, fmt.Errorf("load admin agent run: %w", err)
 	}
-	if RunStatus(run.Status) == RunCanceled {
-		s.appendEvent(ctx, run.ID, "late-result", "error",
-			"The engine reported a result after the run was canceled", nil)
-		return run, nil
-	}
+	return run, nil
+}
 
-	now := s.now().UTC()
+// callbackBlocked keeps terminal runs immutable except for one case: an engine
+// that finished after a restart may correct an interrupted run's unknown state.
+func callbackBlocked(run *AgentRun, status RunStatus) bool {
+	if !RunStatus(run.Status).Terminal() {
+		return false
+	}
+	return !(run.Status == string(RunFailed) && run.FailureCode == "interrupted" && status.Terminal())
+}
+
+func applyAgentCallbackFields(run *AgentRun, status RunStatus, callback AgentCallback, now time.Time) {
 	run.Status = string(status)
 	if run.StartedAt == nil {
 		run.StartedAt = &now
@@ -509,6 +565,9 @@ func (s *Service) ApplyCallback(ctx context.Context, callback AgentCallback) (*A
 			run.FailureMessage = "The engine reported a failure"
 		}
 	}
+}
+
+func (s *Service) persistAgentCallback(ctx context.Context, run *AgentRun, callback AgentCallback, now time.Time) error {
 	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewUpdate().Model(run).
 			Column("status", "branch", "base_revision", "summary", "failure_code", "failure_message", "started_at", "finished_at").
@@ -530,9 +589,9 @@ func (s *Service) ApplyCallback(ctx context.Context, callback AgentCallback) (*A
 		}
 		return nil
 	}); err != nil {
-		return nil, fmt.Errorf("apply admin agent callback: %w", err)
+		return fmt.Errorf("apply admin agent callback: %w", err)
 	}
-	return run, nil
+	return nil
 }
 
 func (s *Service) Events(ctx context.Context, runID string, afterSeq int64) ([]AgentEvent, error) {
@@ -607,7 +666,7 @@ func (s *Service) executeAssistant(runID string) {
 	}
 	if RunStatus(current.Status) == RunCanceled {
 		s.appendEvent(context.Background(), runID, "assistant-late", "error",
-			"The assistant finished after the run was canceled", nil)
+			"The assistant finished after the run was canceled")
 		return
 	}
 	now := s.now().UTC()
@@ -625,7 +684,7 @@ func (s *Service) executeAssistant(runID string) {
 	}); err != nil {
 		return
 	}
-	s.appendEvent(ctx, run.ID, "assistant-result", "result", "The assistant replied", nil)
+	s.appendEvent(ctx, run.ID, "assistant-result", "result", "The assistant replied")
 }
 
 func (s *Service) failAssistantRun(ctx context.Context, runID, code, message string) {
@@ -635,7 +694,7 @@ func (s *Service) failAssistantRun(ctx context.Context, runID, code, message str
 	}
 	if RunStatus(current.Status) == RunCanceled {
 		s.appendEvent(context.Background(), runID, "assistant-late", "error",
-			"The assistant reported a failure after the run was canceled", nil)
+			"The assistant reported a failure after the run was canceled")
 		return
 	}
 	now := s.now().UTC()
@@ -649,7 +708,7 @@ func (s *Service) failAssistantRun(ctx context.Context, runID, code, message str
 		Exec(ctx); err != nil {
 		return
 	}
-	s.appendEvent(ctx, runID, "assistant-failed-"+code, "error", message, nil)
+	s.appendEvent(ctx, runID, "assistant-failed-"+code, "error", message)
 }
 
 func assistantTranscript(messages []AgentMessage) string {
@@ -717,7 +776,7 @@ func (s *Service) FailInterrupted(ctx context.Context) (int, error) {
 	now := s.now().UTC()
 	runs := make([]AgentRun, 0)
 	if err := s.db.NewSelect().Model(&runs).
-		Where("status IN (?)", bun.In([]string{
+		Where("status IN (?)", bun.List([]string{
 			string(RunQueued), string(RunDispatched), string(RunRunning),
 		})).
 		Scan(ctx); err != nil {
@@ -736,7 +795,7 @@ func (s *Service) FailInterrupted(ctx context.Context) (int, error) {
 			return index, fmt.Errorf("mark interrupted admin agent run: %w", err)
 		}
 		s.appendEvent(ctx, run.ID, fmt.Sprintf("interrupted-%d", index), "error",
-			run.FailureMessage, nil)
+			run.FailureMessage)
 	}
 	return len(runs), nil
 }
@@ -752,8 +811,8 @@ func (s *Service) runExists(ctx context.Context, runID string) (bool, error) {
 	return true, nil
 }
 
-func (s *Service) appendEvent(ctx context.Context, runID, key, kind, message string, data json.RawMessage) {
-	_ = appendEventTx(ctx, s.db, runID, key, kind, message, data, s.now().UTC())
+func (s *Service) appendEvent(ctx context.Context, runID, key, kind, message string) {
+	_ = appendEventTx(ctx, s.db, runID, key, kind, message, nil, s.now().UTC())
 }
 
 type execer interface {
