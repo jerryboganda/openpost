@@ -520,6 +520,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/agent/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List administrator agent conversations */
+        get: operations["list-admin-agent-conversations"];
+        put?: never;
+        /** Create an administrator agent conversation */
+        post: operations["create-admin-agent-conversation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/agent/conversations/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get an administrator agent conversation */
+        get: operations["get-admin-agent-conversation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/agent/conversations/{conversation_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start an administrator agent run */
+        post: operations["start-admin-agent-run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/agent/engines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List coding engines */
+        get: operations["list-admin-agent-engines"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/agent/runs/{run_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel an administrator agent run */
+        post: operations["cancel-admin-agent-run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/ai-diagnostic": {
         parameters: {
             query?: never;
@@ -7430,6 +7516,104 @@ export interface components {
             revision?: number;
             workspace_activated?: boolean;
         };
+        AdminAgentConversationOutputBody: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/api/v1/schemas/AdminAgentConversationOutputBody.json
+             */
+            readonly $schema?: string;
+            conversation: components["schemas"]["AdminAgentConversationResponse"];
+        };
+        AdminAgentConversationResponse: {
+            /** Format: date-time */
+            created_at: string;
+            engine: string;
+            events: components["schemas"]["AgentEvent"][] | null;
+            id: string;
+            messages: components["schemas"]["AgentMessage"][] | null;
+            runs: components["schemas"]["AgentRun"][] | null;
+            title: string;
+            /** Format: date-time */
+            updated_at: string;
+            workspace_id?: string;
+        };
+        AdminAgentConversationsOutputBody: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/api/v1/schemas/AdminAgentConversationsOutputBody.json
+             */
+            readonly $schema?: string;
+            conversations: components["schemas"]["AgentConversation"][] | null;
+        };
+        AdminAgentEnginesOutputBody: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/api/v1/schemas/AdminAgentEnginesOutputBody.json
+             */
+            readonly $schema?: string;
+            engines: components["schemas"]["EngineStatus"][] | null;
+        };
+        AdminAgentRunOutputBody: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/api/v1/schemas/AdminAgentRunOutputBody.json
+             */
+            readonly $schema?: string;
+            run: components["schemas"]["AgentRun"];
+        };
+        AgentConversation: {
+            /** Format: date-time */
+            created_at: string;
+            engine: string;
+            id: string;
+            title: string;
+            /** Format: date-time */
+            updated_at: string;
+            workspace_id?: string;
+        };
+        AgentEvent: {
+            /** Format: date-time */
+            created_at: string;
+            id: string;
+            kind: string;
+            message: string;
+            run_id: string;
+            /** Format: int64 */
+            seq: number;
+        };
+        AgentMessage: {
+            content: string;
+            conversation_id: string;
+            /** Format: date-time */
+            created_at: string;
+            id: string;
+            role: string;
+            run_id?: string;
+        };
+        AgentRun: {
+            base_revision?: string;
+            branch?: string;
+            conversation_id: string;
+            /** Format: date-time */
+            created_at: string;
+            dispatch_ref?: string;
+            engine: string;
+            failure_code?: string;
+            failure_message?: string;
+            /** Format: date-time */
+            finished_at?: string;
+            id: string;
+            prompt: string;
+            /** Format: date-time */
+            started_at?: string;
+            status: string;
+            summary?: string;
+            workflow_url?: string;
+        };
         AnalyticsMetricMetadata: {
             /** @enum {string} */
             aggregation: "current_snapshot" | "lifetime_total" | "reporting_period_total" | "reporting_period_average";
@@ -8831,6 +9015,20 @@ export interface components {
             item: components["schemas"]["APITokenResponse"];
             /** @description Raw API token. Returned once and never stored in plaintext. */
             token: string;
+        };
+        CreateAdminAgentConversationInputBody: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/api/v1/schemas/CreateAdminAgentConversationInputBody.json
+             */
+            readonly $schema?: string;
+            /** @description Coding engine: opencode, codex, or claude */
+            engine: string;
+            /** @description Optional conversation title */
+            title?: string;
+            /** @description Optional workspace boundary for the conversation */
+            workspace_id?: string;
         };
         CreateBillingCheckoutInputBody: {
             /**
@@ -10334,6 +10532,12 @@ export interface components {
             rendition_id: string;
             social_account_id: string;
             status: string;
+        };
+        EngineStatus: {
+            available: boolean;
+            id: string;
+            label: string;
+            reason?: string;
         };
         ErrorDetail: {
             /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
@@ -16258,6 +16462,16 @@ export interface components {
             /** Format: date-time */
             unreposted_at?: string;
         };
+        StartAdminAgentRunInputBody: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/api/v1/schemas/StartAdminAgentRunInputBody.json
+             */
+            readonly $schema?: string;
+            /** @description Task or question for the selected coding engine */
+            prompt: string;
+        };
         StartCLIAuthInputBody: {
             /**
              * Format: uri
@@ -20347,6 +20561,194 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "list-admin-agent-conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAgentConversationsOutputBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "create-admin-agent-conversation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAdminAgentConversationInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAgentConversationOutputBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "get-admin-agent-conversation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAgentConversationOutputBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "start-admin-agent-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartAdminAgentRunInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAgentRunOutputBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "list-admin-agent-engines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAgentEnginesOutputBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "cancel-admin-agent-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAgentRunOutputBody"];
+                };
+            };
+            /** @description Error */
+            default: {
                 headers: {
                     [name: string]: unknown;
                 };
