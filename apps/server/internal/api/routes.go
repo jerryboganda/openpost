@@ -163,10 +163,13 @@ type RouteDeps struct {
 }
 
 func registerAdminAgentRoutes(api huma.API, deps RouteDeps) {
-	if deps.AdminAgentHandler == nil {
+	if deps.AdminAgentHandler != nil {
+		deps.AdminAgentHandler.RegisterRoutes(api)
 		return
 	}
-	deps.AdminAgentHandler.RegisterRoutes(api)
+	// The contract generator passes empty dependencies. Registration only
+	// describes the routes; request handling still requires the wired handler.
+	handlers.NewAdminAgentHandler(nil, deps.DB, deps.Authenticator, "").RegisterRoutes(api)
 }
 
 func RegisterHumaRoutes(api huma.API, deps RouteDeps) {
