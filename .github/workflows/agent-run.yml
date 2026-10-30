@@ -174,10 +174,7 @@ jobs:
             --base main \
             --head "$branch" \
             --title "agent: automated change for run ${OPENPOST_AGENT_RUN_ID}" \
-            --body "Automated change requested through the OpenPost administrator agent.
-
-Run: ${OPENPOST_AGENT_RUN_ID}
-Repository checks run on this pull request. Review the diff before merging.")"
+            --body "Automated change requested through the OpenPost administrator agent. Run: ${OPENPOST_AGENT_RUN_ID}. Repository checks run on this pull request; review the diff before merging.")"
           echo "changed=true" >> "$GITHUB_OUTPUT"
           echo "url=${url}" >> "$GITHUB_OUTPUT"
 

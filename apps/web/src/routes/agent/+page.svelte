@@ -339,7 +339,7 @@
 						{#each active.messages as message (message.id)}
 							<article
 								class="rounded-lg border p-3"
-								class:bg-muted/40={message.role === 'user'}
+								class:bg-muted={message.role === 'user'}
 							>
 								<p class="text-xs font-medium text-muted-foreground">
 									{message.role === 'user' ? m.agent_you() : m.agent_agent()}
