@@ -43,10 +43,8 @@ The agent holds a broad GitHub token and calls the API as the administrator, so 
 
 All three run on GitHub Actions. Nothing heavy runs on the production server.
 
-| Workflow | Starts on | Shows |
-| --- | --- | --- |
-| Fork Quick Check | push to `feat/**`, `fix/**`, `agent/**` | Go build, vet, lint and focused tests; web lint, type check and unit tests |
-| Fork Agent UI Check | those pushes when the Agent UI or its spec changes | the built app in Chromium with the agent API replaced by fixtures, and screenshots at 1280, 390 and 320 px in light and dark |
-| Fork Agent Live Check | edits to its own workflow file, or a manual run | every catalogue model streaming, chaining tools, and reading an image, against the real OpenCode endpoint (needs the `OPENCODE_API_KEY` secret) |
+- **Fork Quick Check** starts on a push to `feat/**`, `fix/**`, or `agent/**`. It runs the Go build, vet, lint and focused tests (repeated under the race detector, because runs work in the background), the web lint, type check and unit tests, and the repository policy checks.
+- **Fork Agent UI Check** starts on those pushes when the Agent UI or its spec changes. It opens the built app in Chromium with the agent API replaced by fixtures, and keeps screenshots at 1280, 390 and 320 px in light and dark.
+- **Fork Agent Live Check** starts when its own workflow file is edited, or by hand. It makes every catalogue model stream, chain tools, and read an image against the real OpenCode endpoint. It needs the `OPENCODE_API_KEY` secret.
 
 A workflow that is not on the default branch cannot be dispatched by hand, so edit the workflow file on a branch to run it there.
