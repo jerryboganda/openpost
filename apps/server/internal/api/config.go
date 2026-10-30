@@ -50,6 +50,7 @@ var optionalAuthOperationIDs = map[string]struct{}{
 }
 
 var sessionOnlyOperationIDs = map[string]struct{}{
+	"run-instance-ai-diagnostic":      {},
 	"append-provider-approval-review": {},
 	"append-provider-runtime-control": {},
 	"append-provider-certification":   {},

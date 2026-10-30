@@ -1004,6 +1004,8 @@ func main() {
 		PostBuilder:               postBuilder,
 		EditorAgentGenerator:      contentGenerator,
 		EditorAgentModel:          cfg.EffectiveEditorAgentModel(),
+		AIDiagnosticProvider:      cfg.AIProvider,
+		AIDiagnosticModel:         cfg.EffectiveTextGenerationModel(),
 		ContentBuilderEnabled:     publicationBuilderApplication != nil,
 		ContentDiscoveryEnabled:   publicationDiscoveryService != nil,
 		PublicationBuilder:        publicationBuilderApplication,
