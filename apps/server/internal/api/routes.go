@@ -91,6 +91,7 @@ type RouteDeps struct {
 	EditorAgentModel             string
 	AIDiagnosticProvider         string
 	AIDiagnosticModel            string
+	AdminAgentHandler            *handlers.AdminAgentHandler
 	ContentBuilderEnabled        bool
 	ContentDiscoveryEnabled      bool
 	PublicationBuilder           *publicationbuilder.Application
@@ -370,6 +371,9 @@ func RegisterHumaRoutes(api huma.API, deps RouteDeps) {
 	handlers.NewInstanceSettingsHandler(deps.InstanceSettingsService, deps.DB, deps.Authenticator).RegisterRoutes(api)
 	handlers.NewAIPromptHandler(deps.AIPromptService, deps.DB, deps.Authenticator).RegisterRoutes(api)
 	handlers.NewAIDiagnosticHandler(deps.DB, deps.Authenticator, deps.EditorAgentGenerator, deps.AIDiagnosticProvider, deps.AIDiagnosticModel).RegisterRoutes(api)
+	if deps.AdminAgentHandler != nil {
+		deps.AdminAgentHandler.RegisterRoutes(api)
+	}
 	handlers.NewUpdateStatusHandler(deps.DB, deps.Authenticator, deps.UpdateStatusService, deps.InstanceSettingsService).RegisterRoutes(api)
 	handlers.NewGitHubStarsHandler(deps.GitHubStarsService).RegisterRoutes(api)
 

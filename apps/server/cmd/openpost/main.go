@@ -40,6 +40,7 @@ import (
 	"github.com/openpost/backend/internal/platform"
 	"github.com/openpost/backend/internal/queue"
 	accountpreflightservice "github.com/openpost/backend/internal/services/accountpreflight"
+	"github.com/openpost/backend/internal/services/adminagent"
 	"github.com/openpost/backend/internal/services/aiprompts"
 	analyticsservice "github.com/openpost/backend/internal/services/analytics"
 	"github.com/openpost/backend/internal/services/apitokens"
@@ -897,9 +898,39 @@ func main() {
 		}
 	}
 
+	adminAgentBaseURL := cfg.AgentBaseURL
+	if adminAgentBaseURL == "" {
+		adminAgentBaseURL = strings.TrimRight(cfg.PublicURL, "/")
+	}
+	var adminAgentDispatcher adminagent.Dispatcher
+	if dispatcher, err := adminagent.NewGitHubDispatcher(adminagent.GitHubConfig{
+		Repository:     cfg.AgentRepository,
+		Workflow:       cfg.AgentWorkflow,
+		Ref:            cfg.AgentRef,
+		Token:          cfg.AgentGitHubToken,
+		CallbackURL:    adminAgentBaseURL + "/api/v1/admin/agent/callback",
+		CallbackSecret: cfg.AgentCallbackSecret,
+	}); err == nil {
+		adminAgentDispatcher = dispatcher
+	} else {
+		log.Printf("admin agent dispatch disabled: %v", err)
+	}
+	adminAgentService := adminagent.NewService(db, adminAgentDispatcher)
+	if command.role.runsWeb() {
+		if count, err := adminAgentService.FailInterrupted(context.Background()); err != nil {
+			log.Printf("WARNING: failed to reconcile interrupted admin agent runs: %v", err)
+		} else if count > 0 {
+			log.Printf("marked %d interrupted admin agent runs as failed", count)
+		}
+	}
+	adminAgentHandler := handlers.NewAdminAgentHandler(
+		adminAgentService, db, authenticator, cfg.AgentCallbackSecret,
+	)
+
 	apiGroup := e.Group("/api/v1")
 	humaConfig := apiroutes.OpenAPIConfig("1.0.0")
 	api := humaecho.NewWithGroup(e, apiGroup, humaConfig)
+	adminAgentHandler.RegisterEchoRoutes(e)
 	registerMetaInbox(e, inboxIngress, providerAppConfigs)
 	handlers.NewXMessagingHandler(authenticator, xMessagingService).RegisterWebhook(e)
 	if telegramConnectionService != nil {
@@ -1006,6 +1037,7 @@ func main() {
 		EditorAgentModel:          cfg.EffectiveEditorAgentModel(),
 		AIDiagnosticProvider:      cfg.AIProvider,
 		AIDiagnosticModel:         cfg.EffectiveTextGenerationModel(),
+		AdminAgentHandler:         adminAgentHandler,
 		ContentBuilderEnabled:     publicationBuilderApplication != nil,
 		ContentDiscoveryEnabled:   publicationDiscoveryService != nil,
 		PublicationBuilder:        publicationBuilderApplication,

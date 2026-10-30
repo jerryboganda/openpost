@@ -87,6 +87,12 @@ type Config struct {
 	AIWebSearch              bool
 	AIReasoningEffort        string
 	AISessionID              string
+	AgentRepository          string
+	AgentWorkflow            string
+	AgentRef                 string
+	AgentGitHubToken         string
+	AgentCallbackSecret      string
+	AgentBaseURL             string
 	FalAPIKey                string
 	ContentAIProvider        string
 	ContentAIRequireZDR      bool
@@ -306,6 +312,12 @@ func Load() *Config {
 		AIWebSearch:             getEnvBoolWithAliases(true, "OPENPOST_AI_WEB_SEARCH"),
 		AIReasoningEffort:       getEnvEnum("OPENPOST_AI_REASONING_EFFORT", "auto", "auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"),
 		AISessionID:             strings.TrimSpace(getEnvDefault("OPENPOST_AI_SESSION_ID", "")),
+		AgentRepository:         strings.TrimSpace(getEnvDefault("OPENPOST_AGENT_REPOSITORY", "jerryboganda/openpost")),
+		AgentWorkflow:           strings.TrimSpace(getEnvDefault("OPENPOST_AGENT_WORKFLOW", "agent-run.yml")),
+		AgentRef:                strings.TrimSpace(getEnvDefault("OPENPOST_AGENT_REF", "main")),
+		AgentGitHubToken:        strings.TrimSpace(getEnvDefault("OPENPOST_AGENT_GITHUB_TOKEN", "")),
+		AgentCallbackSecret:     strings.TrimSpace(getEnvDefault("OPENPOST_AGENT_CALLBACK_SECRET", "")),
+		AgentBaseURL:            strings.TrimRight(strings.TrimSpace(getEnvDefault("OPENPOST_AGENT_BASE_URL", "")), "/"),
 		FalAPIKey:               strings.TrimSpace(getEnvDefault("FAL_KEY", "")),
 		ContentAIProvider:       strings.TrimSpace(getEnvWithFallbacks("OPENPOST_CONTENT_AI_PROVIDER", "", "OPENPOST_IMAGE_CAPTION_PROVIDER")),
 		ContentAIRequireZDR:     getEnvBoolWithAliases(false, "OPENPOST_CONTENT_AI_REQUIRE_ZDR", "OPENPOST_IMAGE_CAPTION_REQUIRE_ZDR"),
