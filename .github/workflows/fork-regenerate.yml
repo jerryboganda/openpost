@@ -44,6 +44,8 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Format the repository
         run: bun run format
+      - name: Regenerate documentation catalogs
+        run: bun scripts/social-images/catalog.mjs
       - name: Regenerate OpenAPI, docs, CLI, and automation contracts
         run: |
           bun scripts/sync-docs-openapi.mjs
