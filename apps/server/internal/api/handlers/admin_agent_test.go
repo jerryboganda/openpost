@@ -278,8 +278,8 @@ func TestAdminAgentMessageOptionsConflictsAndDeletion(t *testing.T) {
 
 	canceled := requestAgent(t, e, http.MethodPost, "/api/v1/admin/agent/runs/"+startedBody.Run.ID+"/cancel", nil)
 	require.Equal(t, http.StatusOK, canceled.Code, canceled.Body.String())
-	require.Equal(t, http.StatusNoContent,
-		requestAgent(t, e, http.MethodDelete, "/api/v1/admin/agent/conversations/"+conversationID, nil).Code)
+	deleted := requestAgent(t, e, http.MethodDelete, "/api/v1/admin/agent/conversations/"+conversationID, nil)
+	require.Equal(t, http.StatusNoContent, deleted.Code, deleted.Body.String())
 	require.Equal(t, http.StatusNotFound,
 		requestAgent(t, e, http.MethodGet, "/api/v1/admin/agent/conversations/"+conversationID, nil).Code)
 	require.Equal(t, http.StatusNotFound,

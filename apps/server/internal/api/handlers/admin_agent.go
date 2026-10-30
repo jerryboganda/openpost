@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -254,6 +255,7 @@ func (h *AdminAgentHandler) deleteConversation(
 		case errors.Is(err, adminagent.ErrRunActive):
 			return nil, huma.Error409Conflict("stop the running task before deleting this conversation")
 		default:
+			log.Printf("admin agent: delete conversation %s: %v", input.ConversationID, err)
 			return nil, huma.Error500InternalServerError("failed to delete agent conversation")
 		}
 	}
