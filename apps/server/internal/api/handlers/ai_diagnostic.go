@@ -86,7 +86,9 @@ func (h *AIDiagnosticHandler) run(ctx context.Context, _ *struct{}) (out *AIDiag
 	out.Body.Model = h.model
 	started := time.Now()
 	defer func() {
-		out.Body.LatencyMS = time.Since(started).Milliseconds()
+		if out != nil {
+			out.Body.LatencyMS = time.Since(started).Milliseconds()
+		}
 	}()
 
 	if err := requireBrowserSessionInstanceAdmin(ctx, h.db); err != nil {
