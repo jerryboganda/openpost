@@ -1,5 +1,7 @@
 # OpenPost agent guide
 
+acceptance: bun run check
+
 OpenPost is the all-in-one content team for solo founders. It turns their work into channel-ready content, publishes it, and brings outcomes back into one workspace. Hosted is the primary product; self-hosting is a deployment option.
 
 - A **Publication** is the user-visible post. It owns the source idea, schedule, status, and destination outputs.

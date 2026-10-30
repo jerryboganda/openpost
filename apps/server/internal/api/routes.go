@@ -91,6 +91,7 @@ type RouteDeps struct {
 	EditorAgentModel             string
 	AIDiagnosticProvider         string
 	AIDiagnosticModel            string
+	AdminAgentHandler            *handlers.AdminAgentHandler
 	ContentBuilderEnabled        bool
 	ContentDiscoveryEnabled      bool
 	PublicationBuilder           *publicationbuilder.Application
@@ -159,6 +160,16 @@ type RouteDeps struct {
 	MCPOAuthHandler *handlers.MCPOAuthHandler
 	MCPHandler      *handlers.MCPHandler
 	ProfileHandler  *handlers.ProfileHandler
+}
+
+func registerAdminAgentRoutes(api huma.API, deps RouteDeps) {
+	if deps.AdminAgentHandler != nil {
+		deps.AdminAgentHandler.RegisterRoutes(api)
+		return
+	}
+	// The contract generator passes empty dependencies. Registration only
+	// describes the routes; request handling still requires the wired handler.
+	handlers.NewAdminAgentHandler(nil, deps.DB, deps.Authenticator, "").RegisterRoutes(api)
 }
 
 func RegisterHumaRoutes(api huma.API, deps RouteDeps) {
@@ -370,6 +381,7 @@ func RegisterHumaRoutes(api huma.API, deps RouteDeps) {
 	handlers.NewInstanceSettingsHandler(deps.InstanceSettingsService, deps.DB, deps.Authenticator).RegisterRoutes(api)
 	handlers.NewAIPromptHandler(deps.AIPromptService, deps.DB, deps.Authenticator).RegisterRoutes(api)
 	handlers.NewAIDiagnosticHandler(deps.DB, deps.Authenticator, deps.EditorAgentGenerator, deps.AIDiagnosticProvider, deps.AIDiagnosticModel).RegisterRoutes(api)
+	registerAdminAgentRoutes(api, deps)
 	handlers.NewUpdateStatusHandler(deps.DB, deps.Authenticator, deps.UpdateStatusService, deps.InstanceSettingsService).RegisterRoutes(api)
 	handlers.NewGitHubStarsHandler(deps.GitHubStarsService).RegisterRoutes(api)
 

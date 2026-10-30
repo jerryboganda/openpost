@@ -51,6 +51,12 @@ var optionalAuthOperationIDs = map[string]struct{}{
 
 var sessionOnlyOperationIDs = map[string]struct{}{
 	"run-instance-ai-diagnostic":      {},
+	"list-admin-agent-engines":        {},
+	"list-admin-agent-conversations":  {},
+	"create-admin-agent-conversation": {},
+	"get-admin-agent-conversation":    {},
+	"start-admin-agent-run":           {},
+	"cancel-admin-agent-run":          {},
 	"append-provider-approval-review": {},
 	"append-provider-runtime-control": {},
 	"append-provider-certification":   {},

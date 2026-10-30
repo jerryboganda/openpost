@@ -169,6 +169,27 @@ const imperativeReadAllowlist = [
     count: 1,
     reason: "user-triggered random prompt fetch for the prompt button",
   },
+  {
+    file: "apps/web/src/routes/agent/+page.svelte",
+    endpoint: "/admin/agent/engines",
+    count: 1,
+    reason:
+      "administrator-only agent console bootstrap; engine availability is interactive view state reconciled with the streamed run",
+  },
+  {
+    file: "apps/web/src/routes/agent/+page.svelte",
+    endpoint: "/admin/agent/conversations",
+    count: 1,
+    reason:
+      "administrator-only agent console conversation index, refreshed after mutations and stream completion",
+  },
+  {
+    file: "apps/web/src/routes/agent/+page.svelte",
+    endpoint: "/admin/agent/conversations/{conversation_id}",
+    count: 1,
+    reason:
+      "one conversation history load on selection, reconciled with the durable event stream rather than shared cache state",
+  },
 ];
 
 const pairingReadAllowlist = [
