@@ -67,6 +67,11 @@ func newAdminAgentTestServerWithChat(
 ) (*echo.Echo, *adminagent.Service) {
 	t.Helper()
 	db := createHandlerTestDB(t, (*models.User)(nil))
+	// The in-memory shared-cache database fails at once when two connections
+	// touch the same table, and a run that was just stopped may still be
+	// releasing a cursor. Production databases wait instead, so the test uses
+	// one connection and lets concurrent work take turns.
+	db.SetMaxOpenConns(1)
 	_, err := db.NewInsert().Model(&models.User{
 		ID: "user-1", Email: "admin@example.com", DisplayName: "Admin",
 		PasswordHash: "hash", IsAdmin: isAdmin, CreatedAt: time.Now().UTC(),
