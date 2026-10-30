@@ -123,10 +123,12 @@
 		closeStream();
 		const source = new EventSource(`/api/v1/admin/agent/runs/${runID}/events?after=${after}`);
 		source.addEventListener('run', (event) => {
+			// SAFETY: EventSource dispatches a MessageEvent for named events, and the server serializes the Run model as JSON.
 			const run = JSON.parse((event as MessageEvent).data) as Run;
 			upsertRun(run);
 		});
 		source.addEventListener('event', (event) => {
+			// SAFETY: EventSource dispatches a MessageEvent for named events, and the server serializes Event records as JSON.
 			const update = JSON.parse((event as MessageEvent).data) as RunEvent;
 			if (active && !active.events.some((existing) => existing.id === update.id)) {
 				active.events.push(update);

@@ -304,6 +304,17 @@ func (h *AdminAgentHandler) streamEvents(c echo.Context) error {
 	if !send("run", run) {
 		return nil
 	}
+	h.forwardRunEvents(ctx, runID, run, after, send)
+	return nil
+}
+
+func (h *AdminAgentHandler) forwardRunEvents(
+	ctx context.Context,
+	runID string,
+	run *adminagent.Run,
+	after int64,
+	send func(string, any) bool,
+) {
 	lastStatus := run.Status
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -312,34 +323,34 @@ func (h *AdminAgentHandler) streamEvents(c echo.Context) error {
 	for {
 		if adminagent.RunStatus(run.Status).Terminal() {
 			send("done", map[string]string{"status": run.Status})
-			return nil
+			return
 		}
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case <-lifetime.C:
-			return nil
+			return
 		case <-ticker.C:
 			events, err := h.service.Events(ctx, runID, after)
 			if err != nil {
 				send("stream_error", map[string]string{"message": "progress unavailable"})
-				return nil
+				return
 			}
 			for _, event := range events {
 				if !send("event", event) {
-					return nil
+					return
 				}
 				after = event.Seq
 			}
 			updated, err := h.service.GetRun(ctx, runID)
 			if err != nil {
-				return nil
+				return
 			}
 			run = updated
 			if run.Status != lastStatus {
 				lastStatus = run.Status
 				if !send("run", run) {
-					return nil
+					return
 				}
 			}
 		}
