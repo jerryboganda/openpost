@@ -46,7 +46,7 @@
 <div class="rounded-lg border bg-background/40" data-slot="agent-tool" data-state={step.state}>
 	<button
 		type="button"
-		class="flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+		class="flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset [@media(pointer:coarse)]:min-h-11"
 		aria-expanded={open}
 		aria-controls={panelId}
 		onclick={toggle}

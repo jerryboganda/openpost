@@ -121,7 +121,7 @@
 	// one, so a long model name truncates instead of pushing chips onto rows of
 	// their own. `order` places them without changing the keyboard order.
 	const triggerClass =
-		'min-w-0 flex-1 border-transparent bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground sm:max-w-44 sm:flex-none sm:order-none';
+		'min-w-0 flex-auto border-transparent bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground sm:max-w-44 sm:flex-none sm:order-none';
 	const actionClass = 'order-3 ml-auto shrink-0 rounded-full sm:order-none';
 </script>
 
