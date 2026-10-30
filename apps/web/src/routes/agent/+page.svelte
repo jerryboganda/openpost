@@ -113,10 +113,18 @@
 			return;
 		}
 		const view = response.data.conversation;
-		active = view;
+		const conversation: ConversationView = {
+			...view,
+			messages: view.messages ?? [],
+			runs: view.runs ?? [],
+			events: view.events ?? []
+		};
+		active = conversation;
 		error = '';
-		lastEventSeq = view.events.reduce((max, event) => Math.max(max, event.seq), 0);
-		const running = view.runs.find((run) => runActive(run.status));
+		const running = conversation.runs.find((run) => runActive(run.status));
+		lastEventSeq = conversation.events
+			.filter((event) => event.run_id === running?.id)
+			.reduce((max, event) => Math.max(max, event.seq), 0);
 		if (running) startStream(running.id, lastEventSeq);
 	}
 

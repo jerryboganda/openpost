@@ -72,13 +72,13 @@ func requestAgent(t *testing.T, e *echo.Echo, method, path string, body any) *ht
 }
 
 func TestAdminAgentAuthorizationAndConversationFlow(t *testing.T) {
-	t.AgentRun("ordinary user cannot list conversations", func(t *testing.T) {
+	t.Run("ordinary user cannot list conversations", func(t *testing.T) {
 		e, _, _ := newAdminAgentTestServer(t, false, &agentTestDispatcher{})
 		response := requestAgent(t, e, http.MethodGet, "/api/v1/admin/agent/conversations", nil)
 		require.Equal(t, http.StatusForbidden, response.Code)
 	})
 
-	t.AgentRun("api token cannot use the administrator agent", func(t *testing.T) {
+	t.Run("api token cannot use the administrator agent", func(t *testing.T) {
 		e, _, _ := newAdminAgentTestServer(t, true, &agentTestDispatcher{})
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/agent/conversations", nil)
 		request.Header.Set("Authorization", "Bearer bad-token")
@@ -87,7 +87,7 @@ func TestAdminAgentAuthorizationAndConversationFlow(t *testing.T) {
 		require.NotEqual(t, http.StatusOK, recorder.Code)
 	})
 
-	t.AgentRun("admin creates a conversation and starts a run", func(t *testing.T) {
+	t.Run("admin creates a conversation and starts a run", func(t *testing.T) {
 		dispatcher := &agentTestDispatcher{}
 		e, service, _ := newAdminAgentTestServer(t, true, dispatcher)
 
@@ -121,7 +121,7 @@ func TestAdminAgentAuthorizationAndConversationFlow(t *testing.T) {
 		require.Equal(t, "user", view.Messages[0].Role)
 	})
 
-	t.AgentRun("unknown engine is rejected", func(t *testing.T) {
+	t.Run("unknown engine is rejected", func(t *testing.T) {
 		e, _, _ := newAdminAgentTestServer(t, true, &agentTestDispatcher{})
 		response := requestAgent(t, e, http.MethodPost, "/api/v1/admin/agent/conversations", map[string]string{
 			"engine": "shell",
