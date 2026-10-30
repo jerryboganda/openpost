@@ -10306,7 +10306,7 @@
 	"settings_ai_diagnostic_malformed_response": "The provider returned an unexpected response.",
 	"settings_ai_diagnostic_failed": "Could not run the provider test.",
 	"agent_title": "Agent",
-	"agent_description": "Ask the administrator agent to inspect, change, or operate OpenPost. Runs execute in GitHub Actions.",
+	"agent_description": "Ask the administrator agent to inspect, explain, or operate OpenPost. The built-in assistant answers immediately; coding tasks run on GitHub Actions.",
 	"agent_admin_only": "Administrator access is required.",
 	"agent_load_failed": "Could not load the agent workspace.",
 	"agent_new_conversation": "New conversation",

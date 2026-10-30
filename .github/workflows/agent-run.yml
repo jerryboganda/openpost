@@ -36,7 +36,7 @@ env:
 jobs:
   agent:
     name: Run the selected engine
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       OPENPOST_AGENT_CALLBACK_SECRET: ${{ secrets.OPENPOST_AGENT_CALLBACK_SECRET }}
@@ -175,8 +175,10 @@ jobs:
             --head "$branch" \
             --title "agent: automated change for run ${OPENPOST_AGENT_RUN_ID}" \
             --body "Automated change requested through the OpenPost administrator agent. Run: ${OPENPOST_AGENT_RUN_ID}. Repository checks run on this pull request; review the diff before merging.")"
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          {
+            echo "changed=true"
+            echo "url=${url}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Report the result
         if: always() && steps.credentials.outputs.available == 'true'

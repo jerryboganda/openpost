@@ -9,6 +9,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/openpost/backend/internal/ai"
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
@@ -216,4 +217,84 @@ func TestPromptAndEngineValidation(t *testing.T) {
 	require.NoError(t, err)
 	_, err = service.StartRun(ctx, conversation.ID, "   ")
 	require.ErrorIs(t, err, ErrInvalidPrompt)
+}
+
+type fakeAssistantGenerator struct {
+	text string
+	err  error
+}
+
+func (f *fakeAssistantGenerator) Generate(_ context.Context, _ ai.GenerateRequest) (ai.GenerateResult, error) {
+	if f.err != nil {
+		return ai.GenerateResult{}, f.err
+	}
+	return ai.GenerateResult{Text: f.text, Model: "opencode-test"}, nil
+}
+
+func waitForTerminalRun(t *testing.T, service *Service, runID string) *Run {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		run, err := service.GetRun(context.Background(), runID)
+		require.NoError(t, err)
+		if RunStatus(run.Status).Terminal() {
+			return run
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("run %s did not finish", runID)
+	return nil
+}
+
+func TestBuiltInAssistantAnswersAndPersistsHistory(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(adminAgentTestDB(t), nil)
+	service.SetAssistant(&fakeAssistantGenerator{text: "The instance has three publications."}, "opencode-test")
+
+	engines := service.Engines()
+	require.True(t, engines[0].Available)
+	require.Equal(t, EngineAssistant, engines[0].ID)
+
+	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineAssistant)
+	require.NoError(t, err)
+	run, err := service.StartRun(ctx, conversation.ID, "How many publications exist?")
+	require.NoError(t, err)
+	require.Equal(t, string(RunRunning), run.Status)
+
+	finished := waitForTerminalRun(t, service, run.ID)
+	require.Equal(t, string(RunSucceeded), finished.Status)
+	require.Contains(t, finished.Summary, "three publications")
+
+	view, err := service.GetConversation(ctx, conversation.ID)
+	require.NoError(t, err)
+	require.Len(t, view.Messages, 2)
+	require.Equal(t, "assistant", view.Messages[1].Role)
+	require.Contains(t, view.Messages[1].Content, "three publications")
+}
+
+func TestBuiltInAssistantFailureIsTruthful(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(adminAgentTestDB(t), nil)
+	service.SetAssistant(&fakeAssistantGenerator{
+		err: &ai.ProviderError{Provider: "OpenCode", StatusCode: 401},
+	}, "opencode-test")
+	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineAssistant)
+	require.NoError(t, err)
+	run, err := service.StartRun(ctx, conversation.ID, "Hello")
+	require.NoError(t, err)
+	finished := waitForTerminalRun(t, service, run.ID)
+	require.Equal(t, string(RunFailed), finished.Status)
+	require.Equal(t, "invalid_credentials", finished.FailureCode)
+	require.NotContains(t, finished.FailureMessage, "sk-")
+}
+
+func TestBuiltInAssistantMissingProviderIsReported(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(adminAgentTestDB(t), nil)
+	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineAssistant)
+	require.NoError(t, err)
+	run, err := service.StartRun(ctx, conversation.ID, "Hello")
+	require.NoError(t, err)
+	require.Equal(t, string(RunFailed), run.Status)
+	require.Equal(t, "not_configured", run.FailureCode)
 }

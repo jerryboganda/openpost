@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/openpost/backend/internal/ai"
 	"github.com/uptrace/bun"
 )
 
@@ -25,13 +26,14 @@ const (
 type Engine string
 
 const (
-	EngineOpenCode Engine = "opencode"
-	EngineCodex    Engine = "codex"
-	EngineClaude   Engine = "claude"
+	EngineAssistant Engine = "assistant"
+	EngineOpenCode  Engine = "opencode"
+	EngineCodex     Engine = "codex"
+	EngineClaude    Engine = "claude"
 )
 
 func (e Engine) Valid() bool {
-	return e == EngineOpenCode || e == EngineCodex || e == EngineClaude
+	return e == EngineAssistant || e == EngineOpenCode || e == EngineCodex || e == EngineClaude
 }
 
 func ParseEngine(value string) (Engine, error) {
@@ -171,35 +173,64 @@ type Dispatcher interface {
 type Service struct {
 	db         *bun.DB
 	dispatcher Dispatcher
+	assistant  *assistantRunner
 	now        func() time.Time
+}
+
+type assistantRunner struct {
+	generator ai.Generator
+	model     string
+	timeout   time.Duration
 }
 
 func NewService(db *bun.DB, dispatcher Dispatcher) *Service {
 	return &Service{db: db, dispatcher: dispatcher, now: time.Now}
 }
 
+// SetAssistant enables the built-in conversational engine. It shares the
+// instance's configured AI provider, so an OpenCode inference key makes the
+// chat usable without GitHub Actions or any coding-engine credential.
+func (s *Service) SetAssistant(generator ai.Generator, model string) {
+	model = strings.TrimSpace(model)
+	if generator == nil || model == "" {
+		s.assistant = nil
+		return
+	}
+	s.assistant = &assistantRunner{generator: generator, model: model, timeout: 4 * time.Minute}
+}
+
 // Engines reports dispatch readiness. Engine credentials live in GitHub Actions
 // secrets, so a run reports a missing credential as a failed run rather than
 // claiming the engine is available.
 func (s *Service) Engines() []EngineStatus {
-	reason := ""
+	dispatchReason := ""
 	if s.dispatcher == nil {
-		reason = "GitHub Actions dispatch is not configured"
+		dispatchReason = "GitHub Actions dispatch is not configured"
 	}
-	statuses := make([]EngineStatus, 0, 3)
+	assistantReason := ""
+	if s.assistant == nil {
+		assistantReason = "The built-in AI provider is not configured"
+	}
+	statuses := make([]EngineStatus, 0, 4)
+	statuses = append(statuses, EngineStatus{
+		ID:        EngineAssistant,
+		Label:     "OpenCode Assistant (built-in)",
+		Available: assistantReason == "",
+		Reason:    assistantReason,
+	})
 	for _, engine := range []struct {
 		id    Engine
 		label string
 	}{
-		{EngineOpenCode, "OpenCode"},
-		{EngineCodex, "Codex"},
-		{EngineClaude, "Claude Code"},
+		{EngineOpenCode, "OpenCode (GitHub Actions)"},
+		{EngineCodex, "Codex (GitHub Actions)"},
+		{EngineClaude, "Claude Code (GitHub Actions)"},
 	} {
 		statuses = append(statuses, EngineStatus{
 			ID:        engine.id,
 			Label:     engine.label,
-			Available: reason == "",
-			Reason:    reason,
+			Available: dispatchReason == "",
+			Reason:    dispatchReason,
 		})
 	}
 	return statuses
@@ -329,6 +360,26 @@ func (s *Service) StartRun(ctx context.Context, conversationID, prompt string) (
 	}
 
 	engine, _ := ParseEngine(conversation.Engine)
+	if engine == EngineAssistant {
+		if s.assistant == nil {
+			if err := s.finishWithoutDispatch(ctx, run, "not_configured", "The built-in AI provider is not configured"); err != nil {
+				return nil, err
+			}
+			return run, nil
+		}
+		started := s.now().UTC()
+		run.Status = string(RunRunning)
+		run.StartedAt = &started
+		if _, err := s.db.NewUpdate().Model(run).
+			Column("status", "started_at").
+			Where("id = ?", run.ID).
+			Exec(ctx); err != nil {
+			return nil, fmt.Errorf("record assistant run: %w", err)
+		}
+		s.appendEvent(ctx, run.ID, "assistant-start", "progress", "The built-in assistant is thinking", nil)
+		go s.executeAssistant(run.ID)
+		return run, nil
+	}
 	if s.dispatcher == nil {
 		if err := s.finishWithoutDispatch(ctx, run, "not_configured", "GitHub Actions dispatch is not configured"); err != nil {
 			return nil, err
@@ -507,6 +558,156 @@ func (s *Service) GetRun(ctx context.Context, runID string) (*Run, error) {
 		return nil, fmt.Errorf("load admin agent run: %w", err)
 	}
 	return run, nil
+}
+
+// executeAssistant answers with the instance's configured AI provider. It runs
+// outside the request lifecycle so a closed browser does not lose the reply,
+// and it always records a terminal status or a truthful failure.
+func (s *Service) executeAssistant(runID string) {
+	assistant := s.assistant
+	if assistant == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), assistant.timeout)
+	defer cancel()
+
+	run, err := s.GetRun(ctx, runID)
+	if err != nil || RunStatus(run.Status).Terminal() {
+		return
+	}
+	conversation, err := s.GetConversation(ctx, run.ConversationID)
+	if err != nil {
+		s.failAssistantRun(ctx, runID, "assistant_unavailable", "The conversation could not be loaded")
+		return
+	}
+	snapshot := s.instanceSnapshot(ctx)
+	result, err := assistant.generator.Generate(ctx, ai.GenerateRequest{
+		Model:           assistant.model,
+		SystemPrompt:    assistantSystemPrompt(snapshot),
+		UserPrompt:      assistantTranscript(conversation.Messages),
+		MaxOutputTokens: 2000,
+	})
+	if err != nil {
+		code, message := classifyAssistantFailure(ctx, err)
+		s.failAssistantRun(ctx, runID, code, message)
+		return
+	}
+	text := strings.TrimSpace(result.Text)
+	if text == "" {
+		s.failAssistantRun(ctx, runID, "empty_response", "The built-in assistant returned an empty response")
+		return
+	}
+	if len([]rune(text)) > MaxSummaryCharacters {
+		text = string([]rune(text)[:MaxSummaryCharacters])
+	}
+
+	current, err := s.GetRun(ctx, runID)
+	if err != nil {
+		return
+	}
+	if RunStatus(current.Status) == RunCanceled {
+		s.appendEvent(context.Background(), runID, "assistant-late", "error",
+			"The assistant finished after the run was canceled", nil)
+		return
+	}
+	now := s.now().UTC()
+	run.Status = string(RunSucceeded)
+	run.Summary = text
+	run.FinishedAt = &now
+	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if _, err := tx.NewUpdate().Model(run).
+			Column("status", "summary", "finished_at").
+			Where("id = ?", run.ID).
+			Exec(ctx); err != nil {
+			return err
+		}
+		return upsertAssistantMessageTx(ctx, tx, run, now)
+	}); err != nil {
+		return
+	}
+	s.appendEvent(ctx, run.ID, "assistant-result", "result", "The assistant replied", nil)
+}
+
+func (s *Service) failAssistantRun(ctx context.Context, runID, code, message string) {
+	current, err := s.GetRun(ctx, runID)
+	if err != nil {
+		return
+	}
+	if RunStatus(current.Status) == RunCanceled {
+		s.appendEvent(context.Background(), runID, "assistant-late", "error",
+			"The assistant reported a failure after the run was canceled", nil)
+		return
+	}
+	now := s.now().UTC()
+	current.Status = string(RunFailed)
+	current.FailureCode = code
+	current.FailureMessage = message
+	current.FinishedAt = &now
+	if _, err := s.db.NewUpdate().Model(current).
+		Column("status", "failure_code", "failure_message", "finished_at").
+		Where("id = ?", current.ID).
+		Exec(ctx); err != nil {
+		return
+	}
+	s.appendEvent(ctx, runID, "assistant-failed-"+code, "error", message, nil)
+}
+
+func assistantTranscript(messages []Message) string {
+	start := 0
+	if len(messages) > 20 {
+		start = len(messages) - 20
+	}
+	var builder strings.Builder
+	for _, message := range messages[start:] {
+		role := "Administrator"
+		if message.Role == "assistant" {
+			role = "Assistant"
+		}
+		builder.WriteString(role)
+		builder.WriteString(": ")
+		builder.WriteString(message.Content)
+		builder.WriteString("\n\n")
+	}
+	builder.WriteString("Reply to the latest Administrator message.")
+	return builder.String()
+}
+
+func assistantSystemPrompt(snapshot string) string {
+	return "You are the built-in OpenPost administrator assistant. Answer the administrator directly and truthfully. " +
+		"You can see only the snapshot and conversation below. You cannot execute code, change data, publish, or deploy in this mode. " +
+		"Coding and operational tasks run on GitHub Actions with a coding engine; say so when the request needs one. " +
+		"Never invent results, credentials, provider capabilities, or timestamps.\n\n" + snapshot
+}
+
+func (s *Service) instanceSnapshot(ctx context.Context) string {
+	count := func(table string) int {
+		var total int
+		_ = s.db.NewSelect().Table(table).ColumnExpr("COUNT(*)").Scan(ctx, &total)
+		return total
+	}
+	return fmt.Sprintf(
+		"Instance snapshot: %d users, %d workspaces, %d publications.",
+		count("users"), count("workspaces"), count("publications"),
+	)
+}
+
+func classifyAssistantFailure(ctx context.Context, err error) (string, string) {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "timeout", "The built-in assistant timed out"
+	}
+	if errors.Is(err, ai.ErrEmptyResponse) {
+		return "empty_response", "The built-in assistant returned an empty response"
+	}
+	var providerErr *ai.ProviderError
+	if errors.As(err, &providerErr) {
+		switch providerErr.StatusCode {
+		case 401, 403:
+			return "invalid_credentials", "The AI provider rejected the configured credentials"
+		case 429:
+			return "rate_limited", "The AI provider rate limited the request"
+		}
+	}
+	return "provider_error", "The built-in assistant request failed"
 }
 
 // FailInterrupted marks runs that were in flight when this process last

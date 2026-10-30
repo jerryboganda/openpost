@@ -916,6 +916,7 @@ func main() {
 		log.Printf("admin agent dispatch disabled: %v", err)
 	}
 	adminAgentService := adminagent.NewService(db, adminAgentDispatcher)
+	adminAgentService.SetAssistant(contentGenerator, cfg.EffectiveTextGenerationModel())
 	if command.role.runsWeb() {
 		if count, err := adminAgentService.FailInterrupted(context.Background()); err != nil {
 			log.Printf("WARNING: failed to reconcile interrupted admin agent runs: %v", err)

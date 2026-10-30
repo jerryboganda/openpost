@@ -54,7 +54,7 @@
 	let prompt = $state('');
 	let sending = $state(false);
 	let creating = $state(false);
-	let newEngine = $state('opencode');
+	let newEngine = $state('assistant');
 	let newTitle = $state('');
 	let stream: EventSource | null = null;
 	let lastEventSeq = 0;
@@ -87,8 +87,11 @@
 			}
 			engines = engineResponse.data?.engines ?? [];
 			conversations = conversationResponse.data?.conversations ?? [];
-			if (engines.length > 0 && !engines.some((engine) => engine.id === newEngine)) {
-				newEngine = engines[0].id;
+			if (engines.length > 0) {
+				const current = engines.find((engine) => engine.id === newEngine);
+				if (!current || !current.available) {
+					newEngine = engines.find((engine) => engine.available)?.id ?? engines[0].id;
+				}
 			}
 			if (conversations.length > 0) {
 				await openConversation(conversations[0].id);
@@ -291,7 +294,7 @@
 						<Button
 							size="sm"
 							class="w-full"
-							disabled={creating || !newEngine}
+							disabled={creating || !newEngine || !selectedEngine?.available}
 							onclick={createConversation}
 						>
 							{creating ? m.agent_sending() : m.agent_create()}
