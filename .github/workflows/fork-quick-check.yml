@@ -54,14 +54,16 @@ jobs:
       - name: Format the Go sources
         working-directory: apps/server
         run: gofmt -w .
+      # The dev tag serves the web app from disk, so the Go checks do not need
+      # the embedded frontend build.
       - name: Build and vet
         working-directory: apps/server
         run: |
-          go build ./...
-          go vet ./internal/ai/... ./internal/services/adminagent/... ./internal/api/... ./internal/operational/... ./cmd/...
+          go build -tags dev ./...
+          go vet -tags dev ./internal/ai/... ./internal/services/adminagent/... ./internal/api/... ./internal/operational/... ./cmd/...
       - name: Lint
         working-directory: apps/server
-        run: golangci-lint run ./internal/ai/... ./internal/services/adminagent/... ./internal/api/... ./internal/operational/... ./cmd/...
+        run: golangci-lint run --build-tags dev ./internal/ai/... ./internal/services/adminagent/... ./internal/api/... ./internal/operational/... ./cmd/...
       - name: Focused tests
         working-directory: apps/server
         run: |
