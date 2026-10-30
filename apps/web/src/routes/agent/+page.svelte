@@ -182,13 +182,10 @@
 		sending = true;
 		error = '';
 		try {
-			const response = await client.POST(
-				'/admin/agent/conversations/{conversation_id}/messages',
-				{
-					params: { path: { conversation_id: active.id } },
-					body: { prompt: prompt.trim() }
-				}
-			);
+			const response = await client.POST('/admin/agent/conversations/{conversation_id}/messages', {
+				params: { path: { conversation_id: active.id } },
+				body: { prompt: prompt.trim() }
+			});
 			if (response.error || !response.data) {
 				error = m.agent_unknown_error();
 				return;
@@ -282,15 +279,14 @@
 							</Select.Root>
 						</label>
 						{#if selectedEngine && !selectedEngine.available}
-							<InlineNotice tone="warning" message={selectedEngine.reason ?? m.agent_engine_unavailable()} />
+							<InlineNotice
+								tone="warning"
+								message={selectedEngine.reason ?? m.agent_engine_unavailable()}
+							/>
 						{/if}
 						<label class="block text-sm">
 							<span class="text-muted-foreground">{m.agent_title_label()}</span>
-							<Input
-								class="mt-1"
-								bind:value={newTitle}
-								placeholder={m.agent_title_placeholder()}
-							/>
+							<Input class="mt-1" bind:value={newTitle} placeholder={m.agent_title_placeholder()} />
 						</label>
 						<Button
 							size="sm"
@@ -337,14 +333,11 @@
 				{:else}
 					<div class="space-y-3">
 						{#each active.messages as message (message.id)}
-							<article
-								class="rounded-lg border p-3"
-								class:bg-muted={message.role === 'user'}
-							>
+							<article class="rounded-lg border p-3" class:bg-muted={message.role === 'user'}>
 								<p class="text-xs font-medium text-muted-foreground">
 									{message.role === 'user' ? m.agent_you() : m.agent_agent()}
 								</p>
-								<p class="mt-1 whitespace-pre-wrap text-sm">{message.content}</p>
+								<p class="mt-1 text-sm whitespace-pre-wrap">{message.content}</p>
 							</article>
 						{/each}
 					</div>
@@ -371,18 +364,14 @@
 										</Button>
 									{/if}
 									{#if runActive(latestRun.status)}
-										<Button
-											variant="outline"
-											size="sm"
-											onclick={() => cancelRun(latestRun.id)}
-										>
+										<Button variant="outline" size="sm" onclick={() => cancelRun(latestRun.id)}>
 											{m.agent_cancel_run()}
 										</Button>
 									{/if}
 								</div>
 							</div>
 							{#if latestRun.summary}
-								<p class="mt-2 whitespace-pre-wrap text-sm">{latestRun.summary}</p>
+								<p class="mt-2 text-sm whitespace-pre-wrap">{latestRun.summary}</p>
 							{/if}
 							{#if latestRun.failure_message}
 								<p class="mt-2 text-sm text-action-destructive-foreground">
@@ -418,7 +407,13 @@
 						{/if}
 					</div>
 
-					<form class="space-y-2" onsubmit={(event) => { event.preventDefault(); void sendTask(); }}>
+					<form
+						class="space-y-2"
+						onsubmit={(event) => {
+							event.preventDefault();
+							void sendTask();
+						}}
+					>
 						<Textarea
 							bind:value={prompt}
 							placeholder={m.agent_prompt_placeholder()}
@@ -427,7 +422,11 @@
 						/>
 						<div class="flex items-center justify-between gap-2">
 							<p class="text-xs text-muted-foreground">{m.agent_description()}</p>
-							<Button type="submit" size="sm" disabled={sending || !prompt.trim() || Boolean(activeRun)}>
+							<Button
+								type="submit"
+								size="sm"
+								disabled={sending || !prompt.trim() || Boolean(activeRun)}
+							>
 								{sending ? m.agent_sending() : m.agent_send()}
 							</Button>
 						</div>

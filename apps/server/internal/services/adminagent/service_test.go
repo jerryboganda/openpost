@@ -15,8 +15,8 @@ import (
 )
 
 type fakeDispatcher struct {
-	dispatched []DispatchRequest
-	cancelled  []string
+	dispatched  []DispatchRequest
+	cancelled   []string
 	dispatchErr error
 	cancelErr   error
 }
@@ -80,12 +80,12 @@ func TestConversationRunAndCallbackLifecycle(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = service.ApplyCallback(ctx, Callback{
-		RunID:          run.ID,
-		Status:         string(RunSucceeded),
-		Summary:        "Verified readiness and reported the revision.",
-		Branch:         "agent/check",
-		BaseRevision:   "0123456789abcdef0123456789abcdef01234567",
-		Events:         []CallbackEvent{{Key: "phase-setup", Kind: "progress", Message: "duplicate must be ignored"}},
+		RunID:        run.ID,
+		Status:       string(RunSucceeded),
+		Summary:      "Verified readiness and reported the revision.",
+		Branch:       "agent/check",
+		BaseRevision: "0123456789abcdef0123456789abcdef01234567",
+		Events:       []CallbackEvent{{Key: "phase-setup", Kind: "progress", Message: "duplicate must be ignored"}},
 	})
 	require.NoError(t, err)
 
@@ -156,8 +156,8 @@ func TestCancelStopsFurtherStatusChanges(t *testing.T) {
 	require.Equal(t, []string{run.ID}, dispatcher.cancelled)
 
 	afterCancel, err := service.ApplyCallback(ctx, Callback{
-		RunID:  run.ID,
-		Status: string(RunSucceeded),
+		RunID:   run.ID,
+		Status:  string(RunSucceeded),
 		Summary: "Late success must not override the administrator.",
 	})
 	require.NoError(t, err)
@@ -187,8 +187,8 @@ func TestInterruptedRunsAreRecoverableAndCorrectable(t *testing.T) {
 	require.Contains(t, stored.FailureMessage, "outcome is unknown")
 
 	corrected, err := service.ApplyCallback(ctx, Callback{
-		RunID:  run.ID,
-		Status: string(RunSucceeded),
+		RunID:   run.ID,
+		Status:  string(RunSucceeded),
 		Summary: "The engine had already finished after the restart.",
 	})
 	require.NoError(t, err)

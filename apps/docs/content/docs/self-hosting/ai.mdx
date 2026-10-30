@@ -10,11 +10,11 @@ OpenPost can use OpenRouter, OpenCode Console, or any OpenAI-compatible Chat Com
 
 Set `OPENPOST_AI_PROVIDER` to one of:
 
-| Value | Use it for |
-| --- | --- |
+| Value        | Use it for                                                                                    |
+| ------------ | --------------------------------------------------------------------------------------------- |
 | `openrouter` | OpenRouter's model catalog, provider routing, zero-retention controls, and hosted web search. |
-| `opencode` | OpenCode Console's OpenAI-compatible inference endpoint. |
-| `openai` | OpenAI or any other OpenAI-compatible endpoint, including vLLM, Ollama, and LM Studio. |
+| `opencode`   | OpenCode Console's OpenAI-compatible inference endpoint.                                      |
+| `openai`     | OpenAI or any other OpenAI-compatible endpoint, including vLLM, Ollama, and LM Studio.        |
 
 `OPENPOST_AI_API_KEY` is the preferred key. When it is empty, OpenPost falls back to `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`, or `OPENAI_API_KEY` according to the selected provider.
 

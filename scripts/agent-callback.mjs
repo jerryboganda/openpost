@@ -11,7 +11,8 @@ function option(name) {
 function options(name) {
   const values = [];
   for (let index = 0; index < process.argv.length; index += 1) {
-    if (process.argv[index] === name && process.argv[index + 1]) values.push(process.argv[index + 1]);
+    if (process.argv[index] === name && process.argv[index + 1])
+      values.push(process.argv[index + 1]);
   }
   return values;
 }

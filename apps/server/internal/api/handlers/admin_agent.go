@@ -31,15 +31,15 @@ type AdminAgentHandler struct {
 }
 
 type AdminAgentConversationResponse struct {
-	ID          string                  `json:"id"`
-	Engine      string                  `json:"engine"`
-	Title       string                  `json:"title"`
-	WorkspaceID string                  `json:"workspace_id,omitempty"`
-	CreatedAt   time.Time               `json:"created_at"`
-	UpdatedAt   time.Time               `json:"updated_at"`
-	Messages    []adminagent.Message    `json:"messages"`
-	Runs        []adminagent.Run        `json:"runs"`
-	Events      []adminagent.Event      `json:"events"`
+	ID          string               `json:"id"`
+	Engine      string               `json:"engine"`
+	Title       string               `json:"title"`
+	WorkspaceID string               `json:"workspace_id,omitempty"`
+	CreatedAt   time.Time            `json:"created_at"`
+	UpdatedAt   time.Time            `json:"updated_at"`
+	Messages    []adminagent.Message `json:"messages"`
+	Runs        []adminagent.Run     `json:"runs"`
+	Events      []adminagent.Event   `json:"events"`
 }
 
 type adminAgentEnginesOutput struct {

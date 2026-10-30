@@ -16,10 +16,10 @@ import (
 )
 
 const (
-	githubAPIBase            = "https://api.github.com"
-	callbackSkew             = 5 * time.Minute
-	CallbackTimestampHeader  = "X-OpenPost-Agent-Timestamp"
-	CallbackSignatureHeader  = "X-OpenPost-Agent-Signature"
+	githubAPIBase           = "https://api.github.com"
+	callbackSkew            = 5 * time.Minute
+	CallbackTimestampHeader = "X-OpenPost-Agent-Timestamp"
+	CallbackSignatureHeader = "X-OpenPost-Agent-Signature"
 )
 
 type GitHubConfig struct {
