@@ -39,7 +39,7 @@ jobs:
   build:
     name: Build and smoke-test the image
     if: github.event_name == 'push' || inputs.mode == 'build-and-deploy'
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
       digest: ${{ steps.push.outputs.digest }}
@@ -90,6 +90,11 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$digest" > image-digest.txt
           printf 'image=%s@%s\nrevision=%s\n' "${IMAGE}" "$digest" "$GITHUB_SHA" > image-proof.txt
+      - name: Allow anonymous pulls when the package can be published
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PATCH /user/packages/container/openpost -f visibility=public
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fork-image-proof-${{ github.sha }}
@@ -104,7 +109,7 @@ jobs:
     if: |
       always() && vars.OPENPOST_DEPLOY_ENABLED == 'true' &&
       (needs.build.result == 'success' || inputs.mode == 'deploy-only')
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -127,9 +132,11 @@ jobs:
           fi
           [[ "$image" == *"@sha256:"* ]] || { echo "image must be digest-pinned"; exit 1; }
           [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo "revision must be a full git sha"; exit 1; }
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "revision=$revision" >> "$GITHUB_OUTPUT"
-          echo "version=sha-${revision}" >> "$GITHUB_OUTPUT"
+          {
+            echo "image=$image"
+            echo "revision=$revision"
+            echo "version=sha-${revision}"
+          } >> "$GITHUB_OUTPUT"
       - name: Configure SSH
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
