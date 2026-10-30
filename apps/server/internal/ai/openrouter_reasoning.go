@@ -68,7 +68,11 @@ func NewOpenRouterReasoning(config OpenRouterConfig) *OpenRouterReasoning {
 // effort controls has an empty profile. Unlisted models are left to the next
 // source.
 func (r *OpenRouterReasoning) ReasoningProfile(ctx context.Context, model string) (ReasoningProfile, bool) {
-	models, _ := r.load(ctx)
+	models, err := r.load(ctx)
+	if err != nil && models == nil {
+		// Nothing has been read yet, so the next source answers.
+		return ReasoningProfile{}, false
+	}
 	id := strings.ToLower(strings.TrimSpace(model))
 	if profile, ok := models[id]; ok {
 		return profile, true
