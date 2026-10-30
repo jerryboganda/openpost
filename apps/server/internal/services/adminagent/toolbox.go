@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -354,6 +355,8 @@ func (b *toolbox) execute(ctx context.Context, rt *toolRuntime, call ai.ToolCall
 func safeToolRun(ctx context.Context, spec *toolSpec, rt *toolRuntime, args toolArgs) (text string, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			// The model gets a generic message; the details stay in the server log.
+			log.Printf("admin agent tool %s panicked: %v", spec.name, recovered)
 			err = fmt.Errorf("the %s tool failed unexpectedly", spec.name)
 		}
 	}()

@@ -104,6 +104,12 @@ func (s *Service) serveInternal(ctx context.Context, method, target, token strin
 		return internalReply{}, fmt.Errorf("the request could not be built: %w", err)
 	}
 	request.RemoteAddr = "127.0.0.1:0"
+	// A request built for a client has no body and no request URI. Handlers and
+	// middleware are written for server requests, which always have both.
+	if request.Body == nil {
+		request.Body = http.NoBody
+	}
+	request.RequestURI = target
 	if parsed, parseErr := url.Parse(s.env.PublicURL); parseErr == nil && parsed.Host != "" {
 		request.Host = parsed.Host
 		if parsed.Scheme == "https" {

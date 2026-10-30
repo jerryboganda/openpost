@@ -59,9 +59,11 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: apps/server
         run: |
-          go test ./internal/ai/... ./internal/services/adminagent/... ./internal/operational/...
-          go test ./internal/api
-          go test ./internal/api/handlers -run 'AdminAgent|AIDiagnostic'
+          status=0
+          go test ./internal/ai/... ./internal/services/adminagent/... ./internal/operational/... || status=1
+          go test ./internal/api || status=1
+          go test ./internal/api/handlers -run 'AdminAgent|AIDiagnostic' || status=1
+          exit "$status"
 
   backend-lint:
     name: Backend lint
