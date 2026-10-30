@@ -207,6 +207,9 @@
 		{/if}
 	</div>
 	<AIDiagnosticSettings />
+	<div class="flex flex-wrap gap-2">
+		<Button href="/agent" variant="outline" size="sm">{m.agent_title()}</Button>
+	</div>
 	<InstanceBackupSettings {active} {userID} />
 	<ExternalApplicationAdminSettings />
 </div>
