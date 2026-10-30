@@ -90,6 +90,11 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$digest" > image-digest.txt
           printf 'image=%s@%s\nrevision=%s\n' "${IMAGE}" "$digest" "$GITHUB_SHA" > image-proof.txt
+      - name: Allow anonymous pulls when the package can be published
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PATCH /user/packages/container/openpost -f visibility=public
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fork-image-proof-${{ github.sha }}
