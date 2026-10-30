@@ -586,8 +586,8 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
     const composer = composerOf(page);
     await expect(composer).toBeVisible();
 
-    const effortMenu = page.getByRole("combobox", { name: "Reasoning effort" });
-    const modelMenu = page.getByRole("combobox", { name: "Model" });
+    const effortMenu = page.getByRole("button", { name: "Reasoning effort" });
+    const modelMenu = page.getByRole("button", { name: "Model", exact: true });
     await effortMenu.click();
     await expect(page.getByRole("option")).toHaveText(["Auto", "Off", "Low", "High", "Max"]);
     await page.getByRole("option", { name: "Off", exact: true }).click();
@@ -635,7 +635,10 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
     await page.screenshot({ path: info.outputPath("tray-390-light.png") });
     await page.setViewportSize({ width: 1280, height: 900 });
 
-    await page.locator("input[type='file']").setInputFiles({
+    const picker = page.locator("input[type='file']");
+    await expect(picker).toHaveAttribute("aria-hidden", "true");
+    await expect(picker).toHaveAttribute("tabindex", "-1");
+    await picker.setInputFiles({
       name: "picked.png",
       mimeType: "image/png",
       buffer: PICTURE,
