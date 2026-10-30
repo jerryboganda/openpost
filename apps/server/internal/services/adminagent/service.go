@@ -5,6 +5,7 @@ package adminagent
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -248,7 +249,7 @@ func (s *Service) ListConversations(ctx context.Context) ([]Conversation, error)
 func (s *Service) GetConversation(ctx context.Context, id string) (*ConversationView, error) {
 	conversation := new(Conversation)
 	if err := s.db.NewSelect().Model(conversation).Where("id = ?", id).Scan(ctx); err != nil {
-		if errors.Is(err, bun.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrConversationNotFound
 		}
 		return nil, fmt.Errorf("load admin agent conversation: %w", err)
@@ -289,7 +290,7 @@ func (s *Service) StartRun(ctx context.Context, conversationID, prompt string) (
 	}
 	conversation := new(Conversation)
 	if err := s.db.NewSelect().Model(conversation).Where("id = ?", conversationID).Scan(ctx); err != nil {
-		if errors.Is(err, bun.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrConversationNotFound
 		}
 		return nil, fmt.Errorf("load admin agent conversation: %w", err)
@@ -380,7 +381,7 @@ func (s *Service) finishWithoutDispatch(ctx context.Context, run *Run, code, mes
 func (s *Service) CancelRun(ctx context.Context, runID string) (*Run, error) {
 	run := new(Run)
 	if err := s.db.NewSelect().Model(run).Where("id = ?", runID).Scan(ctx); err != nil {
-		if errors.Is(err, bun.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrRunNotFound
 		}
 		return nil, fmt.Errorf("load admin agent run: %w", err)
@@ -416,7 +417,7 @@ func (s *Service) ApplyCallback(ctx context.Context, callback Callback) (*Run, e
 	}
 	run := new(Run)
 	if err := s.db.NewSelect().Model(run).Where("id = ?", callback.RunID).Scan(ctx); err != nil {
-		if errors.Is(err, bun.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrRunNotFound
 		}
 		return nil, fmt.Errorf("load admin agent run: %w", err)
@@ -500,7 +501,7 @@ func (s *Service) Events(ctx context.Context, runID string, afterSeq int64) ([]E
 func (s *Service) GetRun(ctx context.Context, runID string) (*Run, error) {
 	run := new(Run)
 	if err := s.db.NewSelect().Model(run).Where("id = ?", runID).Scan(ctx); err != nil {
-		if errors.Is(err, bun.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrRunNotFound
 		}
 		return nil, fmt.Errorf("load admin agent run: %w", err)
@@ -619,7 +620,7 @@ func upsertAssistantMessageTx(ctx context.Context, db execer, run *Run, now time
 			Exec(ctx)
 		return updateErr
 	}
-	if !errors.Is(err, bun.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	_, err = db.NewInsert().Model(&Message{
