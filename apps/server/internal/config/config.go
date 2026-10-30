@@ -94,6 +94,7 @@ type Config struct {
 	AgentCallbackSecret      string
 	AgentBaseURL             string
 	AgentAllowPipelineEdits  bool
+	AgentReasoningEfforts    string
 	FalAPIKey                string
 	ContentAIProvider        string
 	ContentAIRequireZDR      bool
@@ -320,6 +321,7 @@ func Load() *Config {
 		AgentCallbackSecret:     strings.TrimSpace(getEnvDefault("OPENPOST_AGENT_CALLBACK_SECRET", "")),
 		AgentBaseURL:            strings.TrimRight(strings.TrimSpace(getEnvDefault("OPENPOST_AGENT_BASE_URL", "")), "/"),
 		AgentAllowPipelineEdits: getEnvBoolWithAliases(false, "OPENPOST_AGENT_ALLOW_PIPELINE_EDITS"),
+		AgentReasoningEfforts:   strings.TrimSpace(getEnvDefault("OPENPOST_AGENT_REASONING_EFFORTS", "")),
 		FalAPIKey:               strings.TrimSpace(getEnvDefault("FAL_KEY", "")),
 		ContentAIProvider:       strings.TrimSpace(getEnvWithFallbacks("OPENPOST_CONTENT_AI_PROVIDER", "", "OPENPOST_IMAGE_CAPTION_PROVIDER")),
 		ContentAIRequireZDR:     getEnvBoolWithAliases(false, "OPENPOST_CONTENT_AI_REQUIRE_ZDR", "OPENPOST_IMAGE_CAPTION_REQUIRE_ZDR"),

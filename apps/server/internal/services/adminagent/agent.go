@@ -57,7 +57,7 @@ type agentOutcome struct {
 // SetAgent enables the built-in agent engine. It shares the instance's AI
 // provider, so an OpenCode key makes the chat usable without GitHub Actions.
 func (s *Service) SetAgent(chat ai.ChatGenerator, defaultModel string, options []ModelOption) {
-	catalog := newModelCatalog(defaultModel, options)
+	catalog := newModelCatalog(defaultModel, options, s.models.source)
 	if chat == nil || catalog.defaultID == "" {
 		s.agent = nil
 		return
@@ -66,9 +66,16 @@ func (s *Service) SetAgent(chat ai.ChatGenerator, defaultModel string, options [
 	s.models = catalog
 }
 
-// Models lists the models an administrator can choose and the default.
-func (s *Service) Models() (string, []ModelOption) {
-	return s.models.defaultID, s.models.options
+// SetReasoningSource tells the agent where to look up the reasoning efforts of
+// a model that is not in its curated list. It works before or after SetAgent.
+func (s *Service) SetReasoningSource(source ai.ReasoningSource) {
+	s.models.source = source
+}
+
+// Models lists the models an administrator can choose and the default, each
+// with the reasoning efforts it offers.
+func (s *Service) Models(ctx context.Context) (string, []ModelOption) {
+	return s.models.defaultID, s.models.withEfforts(ctx)
 }
 
 func (s *Service) cancelRunContext(runID string) {
@@ -148,12 +155,46 @@ func (s *Service) prepareAgent(ctx context.Context, runID string) (*agentState, 
 	if hasImages && !model.Vision {
 		model = s.visionFallback(ctx, run, model, history)
 	}
+	effort = s.fitEffort(ctx, run, model, effort)
 	box := newToolbox(s.buildTools(), run.Access)
 	messages := append([]ai.ChatMessage{{Role: ai.ChatRoleSystem, Content: s.systemPrompt(run, model, box)}}, history...)
 	return &agentState{
 		run: run, model: model, effort: effort, messages: messages, box: box,
 		runtime: &toolRuntime{service: s, runID: run.ID, userID: view.CreatedByUserID, access: run.Access},
 	}, nil
+}
+
+// fitEffort keeps the reasoning effort within what the model that answers can
+// do. That model can differ from the chosen one after an image fallback, and a
+// provider can change what a model offers between runs.
+func (s *Service) fitEffort(ctx context.Context, run *AgentRun, model ModelOption, effort ai.ReasoningEffort) ai.ReasoningEffort {
+	adjusted := s.models.profile(ctx, model).Nearest(effort)
+	if adjusted != effort {
+		s.emit(ctx, run.ID, "effort-adjust", "status",
+			fmt.Sprintf("%s does not offer %s reasoning, so %s is used", model.Label, describeEffort(effort), describeEffort(adjusted)), nil)
+	}
+	return adjusted
+}
+
+func describeEffort(effort ai.ReasoningEffort) string {
+	if effort == "" {
+		return "automatic"
+	}
+	return string(effort)
+}
+
+// outputBudget is the most a model may write in one turn. Most endpoints count
+// reasoning against it, so the efforts that think longest get more room.
+func outputBudget(effort ai.ReasoningEffort) int64 {
+	switch effort {
+	case ai.ReasoningEffortHigh:
+		return agentMaxTokens + 8_000
+	case ai.ReasoningEffortXHigh:
+		return agentMaxTokens + 24_000
+	case ai.ReasoningEffortMax:
+		return agentMaxTokens + 40_000
+	}
+	return agentMaxTokens
 }
 
 // visionFallback swaps to a model that reads images when the chosen one cannot,
@@ -325,7 +366,7 @@ func (s *Service) runAgentLoop(ctx context.Context, chat ai.ChatGenerator, state
 		var streamed strings.Builder
 		result, err := chat.Chat(ctx, ai.ChatRequest{
 			Model: state.model.ID, Messages: state.messages, Tools: definitions,
-			MaxOutputTokens: agentMaxTokens, ReasoningEffort: state.effort,
+			MaxOutputTokens: outputBudget(state.effort), ReasoningEffort: state.effort,
 		}, func(delta string) {
 			streamed.WriteString(delta)
 			s.setLive(runID, stripReasoning(streamed.String(), true))

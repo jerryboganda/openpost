@@ -3,6 +3,8 @@ import type { components } from '$lib/api/types';
 import type { DestructiveActionOutcome } from '$lib/destructive-action-outcome';
 import { m } from '$lib/paraglide/messages';
 import {
+	effortsFor,
+	fitEffort,
 	normalizePreferences,
 	readLastConversation,
 	readPreferences,
@@ -122,6 +124,14 @@ export class AgentSession {
 	selectedModel = $derived(
 		this.models.find((option) => option.id === this.preferences.model) ?? null
 	);
+	/** The reasoning efforts the selected model offers, Automatic first. */
+	effortChoices = $derived(effortsFor(this.selectedModel));
+	/**
+	 * The effort a message is sent with. The saved choice is kept as the person made it, so
+	 * a model that offers less steps down to what it has, and a model that offers it again
+	 * brings the choice back.
+	 */
+	effectiveEffort = $derived(fitEffort(this.preferences.effort, this.effortChoices));
 
 	#stream: EventSource | null = null;
 	#retry: ReturnType<typeof setTimeout> | undefined;
@@ -234,7 +244,7 @@ export class AgentSession {
 					prompt: text,
 					attachment_ids: images.map((image) => image.id),
 					model: this.preferences.model,
-					effort: this.preferences.effort,
+					effort: this.effectiveEffort,
 					access: this.preferences.access
 				}
 			});

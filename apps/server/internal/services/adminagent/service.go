@@ -461,7 +461,7 @@ func (s *Service) StartRun(ctx context.Context, input StartRunInput) (*AgentRun,
 	if active {
 		return nil, ErrRunActive
 	}
-	options, err := s.runOptions(conversation, input)
+	options, err := s.runOptions(ctx, conversation, input)
 	if err != nil {
 		return nil, err
 	}
@@ -547,7 +547,7 @@ type runSettings struct {
 
 // runOptions validates the per-message choices. They only matter for the
 // built-in agent, so Actions engines store the defaults.
-func (s *Service) runOptions(conversation *AgentConversation, input StartRunInput) (runSettings, error) {
+func (s *Service) runOptions(ctx context.Context, conversation *AgentConversation, input StartRunInput) (runSettings, error) {
 	access, err := normalizeAccess(input.Access)
 	if err != nil {
 		return runSettings{}, err
@@ -559,8 +559,14 @@ func (s *Service) runOptions(conversation *AgentConversation, input StartRunInpu
 	if err != nil {
 		return runSettings{}, err
 	}
-	if _, err := normalizeEffort(input.Effort); err != nil {
+	effort, err := normalizeEffort(input.Effort)
+	if err != nil {
 		return runSettings{}, err
+	}
+	if profile := s.models.profile(ctx, model); !profile.Supports(effort) {
+		return runSettings{}, &UnsupportedEffortError{
+			Model: model.Label, Effort: string(effort), Supported: profile.Names(),
+		}
 	}
 	return runSettings{model: model.ID, effort: strings.ToLower(strings.TrimSpace(input.Effort)), access: access}, nil
 }

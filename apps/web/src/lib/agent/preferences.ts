@@ -6,13 +6,44 @@ export interface AgentPreferences {
 	access: AgentAccess;
 }
 
-export const EFFORTS: AgentEffort[] = ['auto', 'low', 'medium', 'high'];
+/** Every reasoning effort the API understands, lowest first. A model offers a subset of them. */
+export const EFFORTS: AgentEffort[] = [
+	'auto',
+	'none',
+	'minimal',
+	'low',
+	'medium',
+	'high',
+	'xhigh',
+	'max'
+];
 
 const PREFERENCES_KEY = 'openpost.agent.preferences';
 const CONVERSATION_KEY = 'openpost.agent.conversation';
 
 function parseEffort(value: unknown): AgentEffort | undefined {
 	return EFFORTS.find((effort) => effort === value);
+}
+
+/**
+ * The efforts a model offers, with Automatic first. The server lists what each model
+ * really accepts, and sends an empty list as null.
+ */
+export function effortsFor(model: AgentModel | null | undefined): AgentEffort[] {
+	const offered = new Set<string>(model?.efforts ?? []);
+	return EFFORTS.filter((effort) => effort === 'auto' || offered.has(effort));
+}
+
+/**
+ * The offered effort nearest a choice: the highest one not above it, otherwise the lowest
+ * one. The server steps down the same way when a model changes.
+ */
+export function fitEffort(effort: AgentEffort, offered: AgentEffort[]): AgentEffort {
+	if (offered.includes(effort)) return effort;
+	const rank = EFFORTS.indexOf(effort);
+	const graded = offered.filter((candidate) => candidate !== 'auto');
+	const notAbove = graded.filter((candidate) => EFFORTS.indexOf(candidate) <= rank);
+	return notAbove.at(-1) ?? graded[0] ?? 'auto';
 }
 
 function parseAccess(value: unknown): AgentAccess | undefined {

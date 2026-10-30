@@ -223,8 +223,9 @@ func TestAdminAgentListsEnginesAndModels(t *testing.T) {
 			Available bool   `json:"available"`
 		} `json:"engines"`
 		Models []struct {
-			ID     string `json:"id"`
-			Vision bool   `json:"vision"`
+			ID      string   `json:"id"`
+			Vision  bool     `json:"vision"`
+			Efforts []string `json:"efforts"`
 		} `json:"models"`
 		DefaultModel string `json:"default_model"`
 	}
@@ -235,12 +236,67 @@ func TestAdminAgentListsEnginesAndModels(t *testing.T) {
 	require.Equal(t, "deepseek-v4.1-flash", body.DefaultModel)
 	require.Len(t, body.Models, len(adminagent.OpenCodeModels()))
 	var vision int
+	efforts := map[string][]string{}
 	for _, model := range body.Models {
 		if model.Vision {
 			vision++
 		}
+		efforts[model.ID] = model.Efforts
 	}
 	require.Positive(t, vision)
+	require.Equal(t, []string{"none", "low", "high", "max"}, efforts["deepseek-v4.1-flash"])
+	require.Equal(t, []string{"none", "low", "medium", "high", "xhigh", "max"}, efforts["gpt-6-luna"])
+	require.Equal(t, []string{"low", "high", "max"}, efforts["glm-5.3"], "a thinking-only model cannot be switched off")
+	require.Equal(t, []string{}, efforts["kimi-k2.7-code"], "a model with no effort to choose lists an empty array, not null")
+}
+
+func TestAdminAgentAcceptsOnlyTheReasoningEffortsAModelOffers(t *testing.T) {
+	gate := make(chan struct{})
+	t.Cleanup(func() { close(gate) })
+	e, _ := newAdminAgentTestServerWithChat(t, true, &agentTestDispatcher{}, &agentTestChat{gate: gate})
+	conversationID := createAgentConversation(t, e, "assistant")
+	messages := "/api/v1/admin/agent/conversations/" + conversationID + "/messages"
+
+	for _, tc := range []struct {
+		name   string
+		model  string
+		effort string
+		detail string
+	}{
+		{"an alias DeepSeek only maps onto another level", "deepseek-v4.1-flash", "xhigh", "does not offer xhigh reasoning; choose auto, none, low, high, max"},
+		{"a thinking-only model cannot be switched off", "glm-5.3", "none", "choose auto, low, high, max"},
+		{"a model with no graded effort", "kimi-k2.7-code", "high", "has no reasoning levels to choose"},
+		{"a level above the model's top", "gemini-4-argon", "max", "choose auto, low, medium, high"},
+		{"a value that is not an effort", "gpt-6-luna", "extreme", "reasoning effort must be auto"},
+	} {
+		response := requestAgent(t, e, http.MethodPost, messages, map[string]any{"prompt": "x", "model": tc.model, "effort": tc.effort})
+		require.Equal(t, http.StatusBadRequest, response.Code, tc.name+": "+response.Body.String())
+		var problem struct {
+			Detail string `json:"detail"`
+		}
+		decodeAgentBody(t, response, &problem)
+		require.Contains(t, problem.Detail, tc.detail, tc.name)
+	}
+
+	started := requestAgent(t, e, http.MethodPost, messages, map[string]any{"prompt": "Think hard.", "model": "deepseek-v4.1-flash", "effort": "max"})
+	require.Equal(t, http.StatusOK, started.Code, started.Body.String())
+	var startedBody struct {
+		Run adminagent.AgentRun `json:"run"`
+	}
+	decodeAgentBody(t, started, &startedBody)
+	require.Equal(t, "max", startedBody.Run.Effort)
+	require.Equal(t, http.StatusOK, requestAgent(t, e, http.MethodPost, "/api/v1/admin/agent/runs/"+startedBody.Run.ID+"/cancel", nil).Code)
+
+	second := createAgentConversation(t, e, "assistant")
+	extra := requestAgent(t, e, http.MethodPost, "/api/v1/admin/agent/conversations/"+second+"/messages",
+		map[string]any{"prompt": "Go deeper.", "model": "gpt-6-luna", "effort": "xhigh"})
+	require.Equal(t, http.StatusOK, extra.Code, extra.Body.String())
+	var extraBody struct {
+		Run adminagent.AgentRun `json:"run"`
+	}
+	decodeAgentBody(t, extra, &extraBody)
+	require.Equal(t, "xhigh", extraBody.Run.Effort)
+	require.Equal(t, http.StatusOK, requestAgent(t, e, http.MethodPost, "/api/v1/admin/agent/runs/"+extraBody.Run.ID+"/cancel", nil).Code)
 }
 
 func TestAdminAgentMessageOptionsConflictsAndDeletion(t *testing.T) {

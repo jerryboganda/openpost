@@ -53,6 +53,27 @@ func (i agentSessionIssuer) IssueSession(ctx context.Context, userID string, ttl
 	return token, revoke, nil
 }
 
+// agentReasoningSource chooses where the agent learns which reasoning efforts a
+// model offers when the built-in list does not say. An operator's list answers
+// first. OpenRouter publishes the efforts of every model it routes to, and other
+// endpoints use OpenAI's documented models. A model nothing is known about gets
+// the common low, medium, and high.
+func agentReasoningSource(cfg *config.Config) ai.ReasoningSource {
+	var sources ai.ReasoningSources
+	if list := cfg.AgentReasoningEfforts; list != "" {
+		if profile, ok := ai.ParseReasoningProfile(list); ok {
+			sources = append(sources, ai.FixedReasoning{Profile: profile})
+		} else {
+			log.Printf("OPENPOST_AGENT_REASONING_EFFORTS ignored: %q must list efforts from none, minimal, low, medium, high, xhigh, and max", list)
+		}
+	}
+	if aiProviderMode(cfg.AIProvider) == ai.ProviderModeOpenRouter {
+		_, contentConfig := aiProviderConfigs(cfg)
+		sources = append(sources, ai.NewOpenRouterReasoning(contentConfig))
+	}
+	return append(sources, ai.OpenAIReasoning{})
+}
+
 // configureAdminAgent connects the agent to the instance's AI provider, its
 // GitHub repository, the application's own router, and recent logs.
 func configureAdminAgent(
@@ -67,6 +88,7 @@ func configureAdminAgent(
 		models = adminagent.OpenCodeModels()
 	}
 	service.SetAgent(chat, cfg.EffectiveTextGenerationModel(), models)
+	service.SetReasoningSource(agentReasoningSource(cfg))
 	service.SetEnvironment(adminagent.Environment{
 		PublicURL:      cfg.PublicURL,
 		Version:        version,

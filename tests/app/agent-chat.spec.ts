@@ -65,14 +65,22 @@ const MODELS = [
     label: "DeepSeek V4.1 Flash",
     description: "Fast and low cost. Reads images.",
     vision: true,
+    efforts: ["none", "low", "high", "max"],
   },
   {
     id: "kimi-k3",
     label: "Kimi K3",
     description: "Strong at long multi-step tasks. Reads images.",
     vision: true,
+    efforts: ["none", "low", "high", "max"],
   },
-  { id: "glm-5.3", label: "GLM 5.3", description: "Text only.", vision: false },
+  {
+    id: "glm-5.3",
+    label: "GLM 5.3",
+    description: "Text only.",
+    vision: false,
+    efforts: ["low", "high", "max"],
+  },
 ];
 
 const ENGINES = {
@@ -577,6 +585,28 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
 
     const composer = composerOf(page);
     await expect(composer).toBeVisible();
+
+    const effortMenu = page.getByRole("combobox", { name: "Reasoning effort" });
+    const modelMenu = page.getByRole("combobox", { name: "Model" });
+    await effortMenu.click();
+    await expect(page.getByRole("option")).toHaveText(["Auto", "Off", "Low", "High", "Max"]);
+    await page.getByRole("option", { name: "Off", exact: true }).click();
+    await expect(effortMenu).toContainText("Reasoning: Off");
+
+    await modelMenu.click();
+    await page.getByRole("option", { name: /GLM 5\.3/ }).click();
+    await expect(effortMenu).toContainText("Reasoning: Low");
+    await effortMenu.click();
+    await expect(page.getByRole("option")).toHaveText(["Auto", "Low", "High", "Max"]);
+    await page.keyboard.press("Escape");
+
+    await modelMenu.click();
+    await page.getByRole("option", { name: /DeepSeek V4\.1 Flash/ }).click();
+    await expect(effortMenu).toContainText("Reasoning: Off");
+    await effortMenu.click();
+    await page.getByRole("option", { name: "Max", exact: true }).click();
+    await expect(effortMenu).toContainText("Reasoning: Max");
+
     let release: () => void = () => undefined;
     fake.uploadGate = new Promise<void>((resolve) => (release = resolve));
     await composer.focus();
@@ -761,7 +791,7 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
       prompt: "What is wrong with this screenshot?",
       attachment_ids: ["att-upload-1"],
       model: "deepseek-v4.1-flash",
-      effort: "auto",
+      effort: "max",
       access: "full",
     });
     expect(fake.calls("POST", /^\/conversations$/)[0].body).toEqual({ engine: "assistant" });

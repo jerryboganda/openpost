@@ -21,7 +21,7 @@ export interface AgentConversation extends Omit<
 	events: AgentEvent[];
 }
 
-export type AgentEffort = 'auto' | 'low' | 'medium' | 'high';
+export type AgentEffort = 'auto' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type AgentAccess = 'full' | 'read_only';
 
 export const BUILT_IN_ENGINE = 'assistant';
