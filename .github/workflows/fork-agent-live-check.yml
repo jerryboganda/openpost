@@ -6,8 +6,9 @@ name: Fork Agent Live Check
 # stream, call tools across several steps, and read an image, or hand the image
 # to a model that can. A model gets three tries at a plain picture, because a
 # small one can rarely misread it. It also confirms that reasoning a model writes
-# into its answer never reaches the reader. The Go tests skip themselves when the
-# key is missing.
+# into its answer never reaches the reader, and that every reasoning effort the
+# catalog offers for a model is accepted by the endpoint. The Go tests skip
+# themselves when the key is missing.
 on:
   push:
     # A workflow that is not on the default branch yet cannot be dispatched by

@@ -65,14 +65,29 @@ const MODELS = [
     label: "DeepSeek V4.1 Flash",
     description: "Fast and low cost. Reads images.",
     vision: true,
+    efforts: ["none", "low", "high", "max"],
   },
   {
     id: "kimi-k3",
     label: "Kimi K3",
     description: "Strong at long multi-step tasks. Reads images.",
     vision: true,
+    efforts: ["none", "low", "high", "max"],
   },
-  { id: "glm-5.3", label: "GLM 5.3", description: "Text only.", vision: false },
+  {
+    id: "kimi-k2.7-code",
+    label: "Kimi K2.7 Code",
+    description: "Tuned for code changes. Reads images.",
+    vision: true,
+    efforts: [],
+  },
+  {
+    id: "glm-5.3",
+    label: "GLM 5.3",
+    description: "Text only.",
+    vision: false,
+    efforts: ["low", "high", "max"],
+  },
 ];
 
 const ENGINES = {
@@ -577,6 +592,46 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
 
     const composer = composerOf(page);
     await expect(composer).toBeVisible();
+
+    const effortMenu = page.getByRole("button", { name: "Reasoning effort" });
+    const modelMenu = page.getByRole("button", { name: "Model", exact: true });
+    await effortMenu.click();
+    await expect(page.getByRole("option")).toHaveText(["Auto", "Off", "Low", "High", "Max"]);
+    await page.screenshot({ path: info.outputPath("effort-menu-1280-light.png") });
+    await page.getByRole("option", { name: "Off", exact: true }).click();
+    await expect(effortMenu).toContainText("Reasoning: Off");
+
+    await modelMenu.click();
+    await page.getByRole("option", { name: /GLM 5\.3/ }).click();
+    await expect(effortMenu).toContainText("Reasoning: Low");
+    await effortMenu.click();
+    await expect(page.getByRole("option")).toHaveText(["Auto", "Low", "High", "Max"]);
+    await page.keyboard.press("Escape");
+
+    await modelMenu.click();
+    await page.getByRole("option", { name: /Kimi K2\.7 Code/ }).click();
+    await expect(effortMenu).toBeDisabled();
+    await expect(effortMenu).toContainText("Reasoning: Auto");
+    await expect(effortMenu).toHaveAttribute(
+      "title",
+      "This model has no reasoning level to choose",
+    );
+    await page.screenshot({ path: info.outputPath("effort-fixed-1280-light.png") });
+
+    await modelMenu.click();
+    await page.getByRole("option", { name: /DeepSeek V4\.1 Flash/ }).click();
+    await expect(effortMenu).toBeEnabled();
+    await expect(effortMenu).toContainText("Reasoning: Off");
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await effortMenu.click();
+    await expect(page.getByRole("option")).toHaveText(["Auto", "Off", "Low", "High", "Max"]);
+    await expectNoSidewaysScroll(page);
+    await page.screenshot({ path: info.outputPath("effort-menu-390-light.png") });
+    await page.getByRole("option", { name: "Max", exact: true }).click();
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await expect(effortMenu).toContainText("Reasoning: Max");
+
     let release: () => void = () => undefined;
     fake.uploadGate = new Promise<void>((resolve) => (release = resolve));
     await composer.focus();
@@ -605,7 +660,10 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
     await page.screenshot({ path: info.outputPath("tray-390-light.png") });
     await page.setViewportSize({ width: 1280, height: 900 });
 
-    await page.locator("input[type='file']").setInputFiles({
+    const picker = page.locator("input[type='file']");
+    await expect(picker).toHaveAttribute("aria-hidden", "true");
+    await expect(picker).toHaveAttribute("tabindex", "-1");
+    await picker.setInputFiles({
       name: "picked.png",
       mimeType: "image/png",
       buffer: PICTURE,
@@ -761,7 +819,7 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
       prompt: "What is wrong with this screenshot?",
       attachment_ids: ["att-upload-1"],
       model: "deepseek-v4.1-flash",
-      effort: "auto",
+      effort: "max",
       access: "full",
     });
     expect(fake.calls("POST", /^\/conversations$/)[0].body).toEqual({ engine: "assistant" });

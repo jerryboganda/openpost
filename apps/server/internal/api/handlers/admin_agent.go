@@ -94,7 +94,7 @@ type startAdminAgentRunInput struct {
 		Prompt        string   `json:"prompt,omitempty" doc:"Task or question. May be empty when images are attached"`
 		AttachmentIDs []string `json:"attachment_ids,omitempty" doc:"Uploaded images to include with this message, up to 5"`
 		Model         string   `json:"model,omitempty" doc:"Model id for the built-in agent; empty uses the instance default"`
-		Effort        string   `json:"effort,omitempty" doc:"Reasoning effort: auto, low, medium, or high"`
+		Effort        string   `json:"effort,omitempty" doc:"Reasoning effort: auto, none, minimal, low, medium, high, xhigh, or max. The model must offer it; each model in the engines response lists its efforts."`
 		Access        string   `json:"access,omitempty" doc:"Access for the built-in agent: full or read_only"`
 	}
 }
@@ -164,7 +164,7 @@ func (h *AdminAgentHandler) engines(ctx context.Context, _ *struct{}) (*adminAge
 	if err := requireBrowserSessionInstanceAdmin(ctx, h.db); err != nil {
 		return nil, err
 	}
-	defaultModel, options := h.service.Models()
+	defaultModel, options := h.service.Models(ctx)
 	out := &adminAgentEnginesOutput{}
 	out.Body.Engines = h.service.Engines()
 	out.Body.Models = append(make([]adminagent.ModelOption, 0, len(options)), options...)

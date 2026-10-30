@@ -630,6 +630,10 @@ func openRouterReasoningEffort(effort ReasoningEffort) (shared.ReasoningEffort, 
 		return shared.ReasoningEffortMedium, nil
 	case ReasoningEffortHigh:
 		return shared.ReasoningEffortHigh, nil
+	case ReasoningEffortXHigh:
+		return shared.ReasoningEffortXhigh, nil
+	case ReasoningEffortMax:
+		return shared.ReasoningEffortMax, nil
 	default:
 		return "", fmt.Errorf("unsupported AI reasoning effort %q", effort)
 	}

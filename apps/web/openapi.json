@@ -14414,6 +14414,13 @@
 					"description": {
 						"type": "string"
 					},
+					"efforts": {
+						"description": "Reasoning efforts the model accepts besides auto, lowest first. Empty when the model has no effort to choose.",
+						"items": {
+							"type": "string"
+						},
+						"type": ["array", "null"]
+					},
 					"id": {
 						"type": "string"
 					},
@@ -14424,7 +14431,7 @@
 						"type": "boolean"
 					}
 				},
-				"required": ["id", "label", "description", "vision"],
+				"required": ["id", "label", "description", "vision", "efforts"],
 				"type": "object"
 			},
 			"Mute": {
@@ -22845,7 +22852,7 @@
 						"type": ["array", "null"]
 					},
 					"effort": {
-						"description": "Reasoning effort: auto, low, medium, or high",
+						"description": "Reasoning effort: auto, none, minimal, low, medium, high, xhigh, or max. The model must offer it; each model in the engines response lists its efforts.",
 						"type": "string"
 					},
 					"model": {

@@ -50,12 +50,20 @@
 
 	function effortLabel(effort: AgentEffort): string {
 		switch (effort) {
+			case 'none':
+				return m.agent_effort_none();
+			case 'minimal':
+				return m.agent_effort_minimal();
 			case 'low':
 				return m.agent_effort_low();
 			case 'medium':
 				return m.agent_effort_medium();
 			case 'high':
 				return m.agent_effort_high();
+			case 'xhigh':
+				return m.agent_effort_xhigh();
+			case 'max':
+				return m.agent_effort_max();
 			default:
 				return m.agent_effort_auto();
 		}
@@ -298,24 +306,26 @@
 					</Select.Root>
 					<Select.Root
 						type="single"
-						value={session.preferences.effort}
+						value={session.effectiveEffort}
 						onValueChange={chooseEffort}
+						disabled={session.effortChoices.length < 2}
 					>
 						<Select.Trigger
 							size="sm"
 							class={cn(triggerClass, 'order-6')}
 							aria-label={m.agent_effort()}
+							title={session.effortChoices.length < 2 ? m.agent_effort_unavailable() : undefined}
 						>
 							<span class="truncate">
 								<ThemeIcon role="idea" class="mr-1 inline size-3.5 align-text-bottom sm:hidden" />
-								<span class="sm:hidden">{effortLabel(session.preferences.effort)}</span>
+								<span class="sm:hidden">{effortLabel(session.effectiveEffort)}</span>
 								<span class="hidden sm:inline"
-									>{m.agent_effort_value({ level: effortLabel(session.preferences.effort) })}</span
+									>{m.agent_effort_value({ level: effortLabel(session.effectiveEffort) })}</span
 								>
 							</span>
 						</Select.Trigger>
 						<Select.Content>
-							{#each EFFORTS as effort (effort)}
+							{#each session.effortChoices as effort (effort)}
 								<Select.Item value={effort} label={effortLabel(effort)} />
 							{/each}
 						</Select.Content>

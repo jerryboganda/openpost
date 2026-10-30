@@ -268,3 +268,47 @@ func TestChatRejectsMalformedRequestsBeforeAnyNetworkCall(t *testing.T) {
 	}}}, nil)
 	require.ErrorContains(t, err, "image MIME type")
 }
+
+func TestChatSendsEveryEffortTheLadderKnowsAndNothingForAuto(t *testing.T) {
+	var captured map[string]any
+	client := newTestChatClient(t, func(w http.ResponseWriter, r *http.Request) {
+		captured = nil
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		writeSSE(t, w, `{"choices":[{"index":0,"finish_reason":"stop","delta":{"content":"ok"}}]}`)
+	}, nil)
+
+	for _, effort := range []ReasoningEffort{
+		ReasoningEffortNone, ReasoningEffortMinimal, ReasoningEffortLow, ReasoningEffortMedium,
+		ReasoningEffortHigh, ReasoningEffortXHigh, ReasoningEffortMax,
+	} {
+		request := userTurn("hi")
+		request.ReasoningEffort = effort
+		_, err := client.Chat(t.Context(), request, nil)
+		require.NoError(t, err, string(effort))
+		require.Equal(t, string(effort), captured["reasoning_effort"], string(effort))
+	}
+
+	_, err := client.Chat(t.Context(), userTurn("hi"), nil)
+	require.NoError(t, err)
+	require.NotContains(t, captured, "reasoning_effort", "auto leaves the choice to the provider")
+}
+
+func TestChatRejectsAnUnknownEffortBeforeAnyNetworkCall(t *testing.T) {
+	client := newTestChatClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("no request may be sent")
+	}, nil)
+	request := userTurn("hi")
+	request.ReasoningEffort = "extreme"
+	_, err := client.Chat(t.Context(), request, nil)
+	require.ErrorContains(t, err, "unsupported AI reasoning effort")
+}
+
+func TestChatStallLimitGrowsWithTheEffortThatMakesModelsThinkLonger(t *testing.T) {
+	base := 3 * time.Minute
+	require.Equal(t, base, chatIdleFor(base, ""))
+	require.Equal(t, base, chatIdleFor(base, ReasoningEffortNone))
+	require.Equal(t, base, chatIdleFor(base, ReasoningEffortMedium))
+	require.Equal(t, 2*base, chatIdleFor(base, ReasoningEffortHigh))
+	require.Equal(t, 4*base, chatIdleFor(base, ReasoningEffortXHigh))
+	require.Equal(t, 4*base, chatIdleFor(base, ReasoningEffortMax))
+}

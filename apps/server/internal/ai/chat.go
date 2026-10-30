@@ -147,7 +147,7 @@ func NewChatClient(config OpenRouterConfig) (*ChatClient, error) {
 		client = &http.Client{Transport: &http.Transport{
 			Proxy:                 http.ProxyFromEnvironment,
 			TLSHandshakeTimeout:   15 * time.Second,
-			ResponseHeaderTimeout: 4 * time.Minute,
+			ResponseHeaderTimeout: 12 * time.Minute,
 			IdleConnTimeout:       90 * time.Second,
 			ForceAttemptHTTP2:     true,
 		}}
@@ -198,8 +198,9 @@ func (c *ChatClient) Chat(ctx context.Context, request ChatRequest, onText func(
 		return ChatResult{}, errors.New("AI chat request could not be encoded")
 	}
 	var lastErr error
+	idle := chatIdleFor(c.idle, request.ReasoningEffort)
 	for attempt := 1; attempt <= chatMaxAttempts; attempt++ {
-		result, retry, err := c.attempt(ctx, payload, onText)
+		result, retry, err := c.attempt(ctx, payload, idle, onText)
 		if err == nil {
 			return result, nil
 		}
@@ -216,7 +217,7 @@ func (c *ChatClient) Chat(ctx context.Context, request ChatRequest, onText func(
 	return ChatResult{}, lastErr
 }
 
-func (c *ChatClient) attempt(ctx context.Context, payload []byte, onText func(string)) (ChatResult, bool, error) {
+func (c *ChatClient) attempt(ctx context.Context, payload []byte, idle time.Duration, onText func(string)) (ChatResult, bool, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(payload))
 	if err != nil {
 		return ChatResult{}, false, err
@@ -241,7 +242,7 @@ func (c *ChatClient) attempt(ctx context.Context, payload []byte, onText func(st
 	}
 	var result ChatResult
 	if strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
-		result, err = c.readStream(ctx, response.Body, onText)
+		result, err = c.readStream(ctx, response.Body, idle, onText)
 	} else {
 		result, err = c.readJSON(response.Body, onText)
 	}
@@ -318,14 +319,14 @@ func (c *ChatClient) readJSON(body io.Reader, onText func(string)) (ChatResult, 
 	return result, nil
 }
 
-func (c *ChatClient) readStream(ctx context.Context, body io.ReadCloser, onText func(string)) (ChatResult, error) {
-	watchdog := time.AfterFunc(c.idle, func() { _ = body.Close() })
+func (c *ChatClient) readStream(ctx context.Context, body io.ReadCloser, idle time.Duration, onText func(string)) (ChatResult, error) {
+	watchdog := time.AfterFunc(idle, func() { _ = body.Close() })
 	defer watchdog.Stop()
 	accumulator := newChatAccumulator(onText)
 	reader := bufio.NewReaderSize(body, 64<<10)
 	for {
 		line, readErr := reader.ReadString('\n')
-		watchdog.Reset(c.idle)
+		watchdog.Reset(idle)
 		if len(line) > chatMaxResponse {
 			return ChatResult{}, &ProviderError{Provider: c.label}
 		}
@@ -650,14 +651,25 @@ func (c *ChatClient) requestBody(request ChatRequest) (map[string]any, error) {
 // chatReasoningEffort returns the request value, or an empty string when the
 // provider default should apply.
 func chatReasoningEffort(effort ReasoningEffort) (string, error) {
-	switch effort {
-	case "", ReasoningEffortNone:
+	if effort == "" {
 		return "", nil
-	case ReasoningEffortMinimal, ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh:
-		return string(effort), nil
-	default:
+	}
+	if reasoningRank(effort) < 0 {
 		return "", fmt.Errorf("unsupported AI reasoning effort %q", effort)
 	}
+	return string(effort), nil
+}
+
+// chatIdleFor widens the stall limit for the efforts that make a model think
+// for minutes before it writes anything.
+func chatIdleFor(base time.Duration, effort ReasoningEffort) time.Duration {
+	switch effort {
+	case ReasoningEffortHigh:
+		return base * 2
+	case ReasoningEffortXHigh, ReasoningEffortMax:
+		return base * 4
+	}
+	return base
 }
 
 func encodeChatTools(tools []ToolDefinition) []map[string]any {

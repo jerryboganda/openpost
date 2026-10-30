@@ -195,3 +195,28 @@ func TestLiveTextOnlyModelsHandOffImages(t *testing.T) {
 		})
 	}
 }
+
+// TestLiveEveryAdvertisedEffortIsAccepted sends one short run for each model and
+// each reasoning effort the catalog lists, with the output budget the agent
+// really uses. A provider that stops accepting a level fails here, not in front
+// of an administrator choosing it.
+func TestLiveEveryAdvertisedEffortIsAccepted(t *testing.T) {
+	service := liveAgent(t)
+	for _, option := range liveModels(t) {
+		for _, effort := range append([]string{"auto"}, option.Efforts...) {
+			t.Run(option.ID+"/"+effort, func(t *testing.T) {
+				conversation := newAgentConversation(t, service)
+				run, err := service.StartRun(context.Background(), StartRunInput{
+					ConversationID: conversation.ID, UserID: "admin", Model: option.ID, Effort: effort,
+					Prompt: "What is 17 times 23? Answer with the number only.",
+				})
+				require.NoError(t, err)
+				finished := finishedLiveRun(t, service, run.ID)
+				require.Equal(t, string(RunSucceeded), finished.Status, "%s: %s", finished.FailureCode, finished.FailureMessage)
+				t.Logf("model %s at %s: %d output tokens, answered %q", option.ID, effort, finished.OutputTokens, finished.Summary)
+				require.Contains(t, finished.Summary, "391")
+				require.NotContains(t, finished.Summary, "<think")
+			})
+		}
+	}
+}

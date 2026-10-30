@@ -13033,6 +13033,8 @@ export interface components {
         };
         ModelOption: {
             description: string;
+            /** @description Reasoning efforts the model accepts besides auto, lowest first. Empty when the model has no effort to choose. */
+            efforts: string[] | null;
             id: string;
             label: string;
             vision: boolean;
@@ -16507,7 +16509,7 @@ export interface components {
             access?: string;
             /** @description Uploaded images to include with this message, up to 5 */
             attachment_ids?: string[] | null;
-            /** @description Reasoning effort: auto, low, medium, or high */
+            /** @description Reasoning effort: auto, none, minimal, low, medium, high, xhigh, or max. The model must offer it; each model in the engines response lists its efforts. */
             effort?: string;
             /** @description Model id for the built-in agent; empty uses the instance default */
             model?: string;
