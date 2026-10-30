@@ -54,6 +54,7 @@ var sessionOnlyOperationIDs = map[string]struct{}{
 	"list-admin-agent-engines":        {},
 	"list-admin-agent-conversations":  {},
 	"create-admin-agent-conversation": {},
+	"delete-admin-agent-conversation": {},
 	"get-admin-agent-conversation":    {},
 	"start-admin-agent-run":           {},
 	"cancel-admin-agent-run":          {},

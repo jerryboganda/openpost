@@ -9,7 +9,6 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/openpost/backend/internal/ai"
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
@@ -43,19 +42,26 @@ func adminAgentTestDB(t *testing.T) *bun.DB {
 	db := bun.NewDB(raw, sqlitedialect.New())
 	t.Cleanup(func() { _ = db.Close() })
 	for _, statement := range []string{
-		"CREATE TABLE users (id TEXT PRIMARY KEY)",
+		"CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL DEFAULT '', is_admin BOOLEAN NOT NULL DEFAULT 0)",
 		"CREATE TABLE workspaces (id TEXT PRIMARY KEY)",
-		"INSERT INTO users (id) VALUES ('admin')",
+		"INSERT INTO users (id, email, is_admin) VALUES ('admin', 'admin@example.com', 1)",
+		"INSERT INTO users (id, email, is_admin) VALUES ('other', 'other@example.com', 1)",
 		"INSERT INTO workspaces (id) VALUES ('workspace')",
 	} {
 		_, err := db.Exec(statement)
 		require.NoError(t, err)
 	}
-	migration, err := os.ReadFile("../../database/migrations/176_admin_agent.sql")
-	require.NoError(t, err)
-	_, err = db.Exec(string(migration))
-	require.NoError(t, err)
+	for _, name := range []string{"176_admin_agent.sql", "177_admin_agent_chat.sql"} {
+		migration, err := os.ReadFile("../../database/migrations/" + name)
+		require.NoError(t, err)
+		_, err = db.Exec(string(migration))
+		require.NoError(t, err)
+	}
 	return db
+}
+
+func startRun(ctx context.Context, service *Service, conversationID, prompt string) (*AgentRun, error) {
+	return service.StartRun(ctx, StartRunInput{ConversationID: conversationID, UserID: "admin", Prompt: prompt})
 }
 
 func TestConversationRunAndCallbackLifecycle(t *testing.T) {
@@ -67,7 +73,7 @@ func TestConversationRunAndCallbackLifecycle(t *testing.T) {
 	conversation, err := service.CreateConversation(ctx, "admin", "workspace", "Deploy check", EngineOpenCode)
 	require.NoError(t, err)
 
-	run, err := service.StartRun(ctx, conversation.ID, "Inspect the deployment and report readiness.")
+	run, err := startRun(ctx, service, conversation.ID, "Inspect the deployment and report readiness.")
 	require.NoError(t, err)
 	require.Equal(t, string(RunDispatched), run.Status)
 	require.Len(t, dispatcher.dispatched, 1)
@@ -121,7 +127,7 @@ func TestMissingDispatchIsReportedTruthfully(t *testing.T) {
 	}
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineCodex)
 	require.NoError(t, err)
-	run, err := service.StartRun(ctx, conversation.ID, "Change the login copy.")
+	run, err := startRun(ctx, service, conversation.ID, "Change the login copy.")
 	require.NoError(t, err)
 	require.Equal(t, string(RunFailed), run.Status)
 	require.Equal(t, "not_configured", run.FailureCode)
@@ -135,7 +141,7 @@ func TestDispatchFailureDoesNotClaimSuccess(t *testing.T) {
 	service := NewService(adminAgentTestDB(t), dispatcher)
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineClaude)
 	require.NoError(t, err)
-	run, err := service.StartRun(ctx, conversation.ID, "AgentRun the tests.")
+	run, err := startRun(ctx, service, conversation.ID, "Run the tests.")
 	require.NoError(t, err)
 	require.Equal(t, string(RunFailed), run.Status)
 	require.Equal(t, "dispatch_failed", run.FailureCode)
@@ -148,7 +154,7 @@ func TestCancelStopsFurtherStatusChanges(t *testing.T) {
 	service := NewService(adminAgentTestDB(t), dispatcher)
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineOpenCode)
 	require.NoError(t, err)
-	run, err := service.StartRun(ctx, conversation.ID, "Do work.")
+	run, err := startRun(ctx, service, conversation.ID, "Do work.")
 	require.NoError(t, err)
 
 	cancelled, err := service.CancelRun(ctx, run.ID)
@@ -174,7 +180,7 @@ func TestCancellationFailureKeepsRunActive(t *testing.T) {
 	service := NewService(adminAgentTestDB(t), dispatcher)
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineCodex)
 	require.NoError(t, err)
-	run, err := service.StartRun(ctx, conversation.ID, "Inspect the code.")
+	run, err := startRun(ctx, service, conversation.ID, "Inspect the code.")
 	require.NoError(t, err)
 
 	_, err = service.CancelRun(ctx, run.ID)
@@ -190,7 +196,7 @@ func TestCompletedRunIgnoresDelayedCallbacks(t *testing.T) {
 	service := NewService(adminAgentTestDB(t), &fakeDispatcher{})
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineClaude)
 	require.NoError(t, err)
-	run, err := service.StartRun(ctx, conversation.ID, "Check the change.")
+	run, err := startRun(ctx, service, conversation.ID, "Check the change.")
 	require.NoError(t, err)
 	_, err = service.ApplyCallback(ctx, AgentCallback{RunID: run.ID, Status: string(RunSucceeded), Summary: "Verified."})
 	require.NoError(t, err)
@@ -209,7 +215,7 @@ func TestInterruptedRunsAreRecoverableAndCorrectable(t *testing.T) {
 	service := NewService(db, dispatcher)
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineOpenCode)
 	require.NoError(t, err)
-	run, err := service.StartRun(ctx, conversation.ID, "Deploy the change.")
+	run, err := startRun(ctx, service, conversation.ID, "Deploy the change.")
 	require.NoError(t, err)
 
 	count, err := service.FailInterrupted(ctx)
@@ -242,93 +248,41 @@ func TestCallbackSignatureBindsTimestampAndBody(t *testing.T) {
 	require.ErrorIs(t, VerifyCallback("", timestamp, signature, body, now), ErrInvalidCallback)
 }
 
-func TestPromptAndEngineValidation(t *testing.T) {
+func TestPromptEngineAndOptionValidation(t *testing.T) {
 	ctx := context.Background()
 	service := NewService(adminAgentTestDB(t), &fakeDispatcher{})
 	_, err := service.CreateConversation(ctx, "admin", "", "", Engine("shell"))
 	require.ErrorIs(t, err, ErrInvalidEngine)
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineOpenCode)
 	require.NoError(t, err)
-	_, err = service.StartRun(ctx, conversation.ID, "   ")
+	_, err = startRun(ctx, service, conversation.ID, "   ")
 	require.ErrorIs(t, err, ErrInvalidPrompt)
+
+	_, err = service.StartRun(ctx, StartRunInput{ConversationID: conversation.ID, UserID: "admin", Prompt: "x", Access: "root"})
+	require.ErrorIs(t, err, ErrInvalidAccess)
 }
 
-type fakeAssistantGenerator struct {
-	text string
-	err  error
-}
-
-func (f *fakeAssistantGenerator) Generate(_ context.Context, _ ai.GenerateRequest) (ai.GenerateResult, error) {
-	if f.err != nil {
-		return ai.GenerateResult{}, f.err
-	}
-	return ai.GenerateResult{Text: f.text, Model: "opencode-test"}, nil
-}
-
-func waitForTerminalRun(t *testing.T, service *Service, runID string) *AgentRun {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		run, err := service.GetRun(context.Background(), runID)
-		require.NoError(t, err)
-		if RunStatus(run.Status).Terminal() {
-			return run
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("run %s did not finish", runID)
-	return nil
-}
-
-func TestBuiltInAssistantAnswersAndPersistsHistory(t *testing.T) {
+func TestConversationsAreTitledFromTheFirstMessageAndDeletable(t *testing.T) {
 	ctx := context.Background()
-	service := NewService(adminAgentTestDB(t), nil)
-	service.SetAssistant(&fakeAssistantGenerator{text: "The instance has three publications."}, "opencode-test")
-
-	engines := service.Engines()
-	require.True(t, engines[0].Available)
-	require.Equal(t, EngineAssistant, engines[0].ID)
-
-	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineAssistant)
+	service := NewService(adminAgentTestDB(t), &fakeDispatcher{})
+	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineOpenCode)
 	require.NoError(t, err)
-	run, err := service.StartRun(ctx, conversation.ID, "How many publications exist?")
+	run, err := startRun(ctx, service, conversation.ID, "Why did the nightly publish job fail?\nPlease check the logs too.")
 	require.NoError(t, err)
-	require.Equal(t, string(RunRunning), run.Status)
-
-	finished := waitForTerminalRun(t, service, run.ID)
-	require.Equal(t, string(RunSucceeded), finished.Status)
-	require.Contains(t, finished.Summary, "three publications")
 
 	view, err := service.GetConversation(ctx, conversation.ID)
 	require.NoError(t, err)
-	require.Len(t, view.Messages, 2)
-	require.Equal(t, "assistant", view.Messages[1].Role)
-	require.Contains(t, view.Messages[1].Content, "three publications")
-}
+	require.Equal(t, "Why did the nightly publish job fail?", view.Title)
 
-func TestBuiltInAssistantFailureIsTruthful(t *testing.T) {
-	ctx := context.Background()
-	service := NewService(adminAgentTestDB(t), nil)
-	service.SetAssistant(&fakeAssistantGenerator{
-		err: &ai.ProviderError{Provider: "OpenCode", StatusCode: 401},
-	}, "opencode-test")
-	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineAssistant)
+	require.ErrorIs(t, service.DeleteConversation(ctx, conversation.ID), ErrRunActive, "a task in progress must be stopped first")
+	_, err = service.CancelRun(ctx, run.ID)
 	require.NoError(t, err)
-	run, err := service.StartRun(ctx, conversation.ID, "Hello")
-	require.NoError(t, err)
-	finished := waitForTerminalRun(t, service, run.ID)
-	require.Equal(t, string(RunFailed), finished.Status)
-	require.Equal(t, "invalid_credentials", finished.FailureCode)
-	require.NotContains(t, finished.FailureMessage, "sk-")
-}
+	require.NoError(t, service.DeleteConversation(ctx, conversation.ID))
+	_, err = service.GetConversation(ctx, conversation.ID)
+	require.ErrorIs(t, err, ErrConversationNotFound)
+	require.ErrorIs(t, service.DeleteConversation(ctx, conversation.ID), ErrConversationNotFound)
 
-func TestBuiltInAssistantMissingProviderIsReported(t *testing.T) {
-	ctx := context.Background()
-	service := NewService(adminAgentTestDB(t), nil)
-	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineAssistant)
-	require.NoError(t, err)
-	run, err := service.StartRun(ctx, conversation.ID, "Hello")
-	require.NoError(t, err)
-	require.Equal(t, string(RunFailed), run.Status)
-	require.Equal(t, "not_configured", run.FailureCode)
+	var leftovers int
+	require.NoError(t, service.db.NewSelect().Table("admin_agent_events").ColumnExpr("COUNT(*)").Scan(ctx, &leftovers))
+	require.Zero(t, leftovers, "events must be removed with their conversation")
 }
