@@ -971,7 +971,7 @@ export const docsPageCatalog = Object.freeze([
   {
     "page": "self-hosting/ai.mdx",
     "title": "AI providers",
-    "description": "Configure OpenRouter for text and captions, and fal for image generation and editing.",
+    "description": "Configure OpenRouter, OpenCode, or any OpenAI-compatible endpoint for text and captions, and fal for image generation and editing.",
     "route": "/self-hosting/ai",
     "agentRepresentation": {
       "membership": "ordinary"
