@@ -131,6 +131,7 @@ jobs:
             revision="${GITHUB_SHA}"
           fi
           [[ "$image" == *"@sha256:"* ]] || { echo "image must be digest-pinned"; exit 1; }
+          [[ "$image" == "${IMAGE}@sha256:"* ]] || { echo "image must come from ${IMAGE}"; exit 1; }
           [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo "revision must be a full git sha"; exit 1; }
           {
             echo "image=$image"

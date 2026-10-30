@@ -118,6 +118,7 @@ Bootstrap and data-plane settings stay deployment-only because OpenPost needs th
 | `OPENPOST_AGENT_GITHUB_TOKEN` | No | empty | Server-only GitHub token. It dispatches coding-engine runs and powers the built-in agent's repository, pull request, and Actions tools. It needs contents, pull request, and Actions write access. Leave empty to disable both. |
 | `OPENPOST_AGENT_CALLBACK_SECRET` | No | empty | Shared HMAC secret used by the workflow to fetch run context and post signed progress. |
 | `OPENPOST_AGENT_BASE_URL` | No | `OPENPOST_PUBLIC_URL` | Public base URL that GitHub Actions calls back to. Must be reachable from the runner. |
+| `OPENPOST_AGENT_ALLOW_PIPELINE_EDITS` | No | `false` | Lets the built-in agent change files under `.github/` and `deploy/`, which run with the repository's secrets. Leave it off unless you want the agent to edit workflows. Text the agent reads, such as a stranger's pull request, can try to steer it, so a workflow it writes could send those secrets out. |
 | `OPENPOST_WORKFLOWS_AI_ENABLED` | No | `true` | Enables new autonomous workflow AI calls. Set false for an operator kill switch. |
 | `OPENPOST_WORKFLOWS_AI_MONTHLY_CALL_LIMIT` | No | `1000` | Calls per Workspace UTC month, including failures. Zero explicitly permits unlimited calls; negative values are invalid. |
 | `OPENPOST_IMAGE_CAPTION_PROVIDER` | No | empty | Exact OpenRouter provider slug allowed for automatic image alt text. An empty value uses normal eligible-provider routing. |

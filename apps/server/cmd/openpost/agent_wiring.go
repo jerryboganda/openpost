@@ -86,4 +86,5 @@ func configureAdminAgent(
 	if err := service.SetGitHub(cfg.AgentGitHubToken, cfg.AgentRepository, cfg.AgentRef); err != nil {
 		log.Printf("admin agent GitHub tools disabled: %v", err)
 	}
+	service.AllowPipelineEdits(cfg.AgentAllowPipelineEdits)
 }

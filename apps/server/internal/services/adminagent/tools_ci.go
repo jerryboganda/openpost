@@ -661,7 +661,7 @@ func (g *githubAPI) apiTool(ctx context.Context, rt *toolRuntime, args toolArgs)
 	}
 	endpoint := "/" + strings.TrimLeft(strings.ReplaceAll(args.trimmed("path"), "{repo}", g.repository), "/")
 	body := args.object("body")
-	if err := g.apiGuard(method, endpoint, body); err != nil {
+	if err := g.apiGuard(method, endpoint); err != nil {
 		return "", err
 	}
 	if body != nil && containsCommittableSecret(fmt.Sprint(body)) {

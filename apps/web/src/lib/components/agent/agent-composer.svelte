@@ -86,7 +86,13 @@
 	}
 
 	function onKeydown(event: KeyboardEvent) {
-		if (event.key !== 'Enter' || event.isComposing) return;
+		if (event.isComposing) return;
+		if (event.key === 'Escape' && session.activeRun) {
+			event.preventDefault();
+			void session.stop();
+			return;
+		}
+		if (event.key !== 'Enter') return;
 		const touch = globalThis.matchMedia?.('(pointer: coarse)').matches ?? false;
 		const submits = event.metaKey || event.ctrlKey || (!event.shiftKey && !touch);
 		if (!submits) return;
@@ -110,8 +116,11 @@
 		event.currentTarget.value = '';
 	}
 
+	// On phones each chip shares its row, so a long model name truncates instead
+	// of pushing the others onto rows of their own.
 	const triggerClass =
-		'min-w-0 max-w-44 border-transparent bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground';
+		'min-w-0 flex-1 border-transparent bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground sm:max-w-44 sm:flex-none';
+	const actionClass = 'col-start-3 row-start-1 shrink-0 rounded-full sm:ml-auto';
 </script>
 
 <form
@@ -189,40 +198,45 @@
 					</p>
 				{/each}
 			{/if}
+			<!-- The frame around the composer shows focus, so the field draws no border or outline. -->
 			<Textarea
 				unstyled
+				data-slot="agent-composer-input"
 				bind:ref={textarea}
 				bind:value
 				rows={1}
 				placeholder={m.agent_composer_placeholder()}
 				aria-label={m.agent_composer_label()}
 				disabled={blocked}
-				class="field-sizing-content max-h-52 min-h-11 w-full resize-none bg-transparent px-3.5 py-3 text-base outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:text-sm"
+				class="field-sizing-content max-h-52 min-h-11 w-full resize-none border-0 bg-transparent px-3.5 py-3 text-base shadow-none outline-none focus-visible:outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:text-sm"
 				onkeydown={onKeydown}
 				onpaste={onPaste}
 			/>
-			<div class="flex items-end justify-between gap-2 p-2">
-				<div class="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-					<input
-						bind:this={picker}
-						type="file"
-						accept={IMAGE_ACCEPT}
-						multiple
-						class="sr-only"
-						tabindex="-1"
-						aria-hidden="true"
-						onchange={onPick}
-					/>
-					<Button
-						variant="ghost"
-						size="icon-sm"
-						aria-label={m.agent_attach()}
-						title={session.builtIn ? m.agent_attach() : m.agent_attach_unsupported()}
-						disabled={blocked || tray.full || !session.builtIn}
-						onclick={() => picker?.click()}
-					>
-						<ThemeIcon role="image-add" />
-					</Button>
+			<div
+				class="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1 p-2 sm:flex sm:flex-wrap"
+			>
+				<input
+					bind:this={picker}
+					type="file"
+					accept={IMAGE_ACCEPT}
+					multiple
+					class="sr-only"
+					tabindex="-1"
+					aria-hidden="true"
+					onchange={onPick}
+				/>
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					class="col-start-1 row-start-1"
+					aria-label={m.agent_attach()}
+					title={session.builtIn ? m.agent_attach() : m.agent_attach_unsupported()}
+					disabled={blocked || tray.full || !session.builtIn}
+					onclick={() => picker?.click()}
+				>
+					<ThemeIcon role="image-add" />
+				</Button>
+				<div class="col-start-2 row-start-1 flex min-w-0 items-center gap-1 sm:contents">
 					{#if choosableEngines.length > 1}
 						<Select.Root
 							type="single"
@@ -274,6 +288,10 @@
 								{/each}
 							</Select.Content>
 						</Select.Root>
+					{/if}
+				</div>
+				{#if session.builtIn}
+					<div class="col-span-3 flex min-w-0 items-center gap-1 sm:contents">
 						<Select.Root
 							type="single"
 							value={session.preferences.effort}
@@ -304,13 +322,13 @@
 								{/each}
 							</Select.Content>
 						</Select.Root>
-					{/if}
-				</div>
+					</div>
+				{/if}
 				{#if session.working}
 					<Button
 						variant="outline"
 						size="icon"
-						class="shrink-0 rounded-full"
+						class={actionClass}
 						aria-label={m.agent_stop()}
 						title={m.agent_stop()}
 						disabled={session.activeRun === null}
@@ -322,7 +340,7 @@
 					<Button
 						type="submit"
 						size="icon"
-						class="shrink-0 rounded-full"
+						class={actionClass}
 						aria-label={m.agent_send()}
 						title={m.agent_send()}
 						disabled={!canSend}

@@ -53,7 +53,8 @@ function screenshotPng(width: number, height: number): Buffer {
 }
 
 const PICTURE = screenshotPng(240, 140);
-const START = Date.parse("2026-10-30T12:00:00Z");
+// Fixture times are relative to now, so elapsed times read like a real run.
+const START = Date.now() - 2 * 60 * 1000;
 const iso = (seconds: number) => new Date(START + seconds * 1000).toISOString();
 
 const MODELS = [
@@ -376,6 +377,17 @@ test("a stored conversation reads like a chat: steps, a diff, formatted answer, 
     await expect(page.getByText("What should the agent work on?")).toBeVisible();
     await expect(chatButton(page, "Fix the login copy")).toBeVisible();
 
+    await composerOf(page).focus();
+    expect
+      .soft(
+        await composerOf(page).evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { outline: style.outlineStyle, border: style.borderTopWidth, shadow: style.boxShadow };
+        }),
+        "the composer field draws no border, outline, or shadow of its own; its frame shows focus",
+      )
+      .toEqual({ outline: "none", border: "0px", shadow: "none" });
+
     await page.getByRole("button", { name: "Check production health" }).click();
     await expect(composerOf(page)).toHaveValue(/^Check production health\./);
     expect(fake.calls("POST", /messages$/)).toHaveLength(0);
@@ -411,10 +423,15 @@ test("a stored conversation reads like a chat: steps, a diff, formatted answer, 
     await expect(diff.getByText('"login_button": "Sign in"')).toBeVisible();
     await expect(transcript.getByText("DeepSeek V4.1 Flash")).toBeVisible();
     await expect(transcript.getByRole("button", { name: "Copy reply" })).toBeVisible();
+    await transcript.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await page.screenshot({ path: info.outputPath("top-1280-light.png") });
 
     await transcript.getByRole("button", { name: "Open screenshot.png" }).click();
     const viewer = page.getByRole("dialog", { name: "screenshot.png" });
     await expect(viewer.getByRole("img", { name: "screenshot.png" })).toBeVisible();
+    await page.screenshot({ path: info.outputPath("viewer-1280-light.png") });
     await page.keyboard.press("Escape");
     await expect(viewer).toBeHidden();
 
@@ -440,6 +457,12 @@ test("a stored conversation reads like a chat: steps, a diff, formatted answer, 
       await expect(composerOf(page)).toBeVisible();
       await expectNoSidewaysScroll(page);
       await page.screenshot({ path: info.outputPath(`history-${width}-${scheme}.png`) });
+      if (width !== 320) {
+        await transcriptOf(page).evaluate((element) => {
+          element.scrollTop = 0;
+        });
+        await page.screenshot({ path: info.outputPath(`history-top-${width}-${scheme}.png`) });
+      }
     }
   } finally {
     await fake.stop();
@@ -479,6 +502,7 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
     expect(fake.uploads[0].filename).toBe("pasted.png");
     expect(fake.uploads[0].type).toBe("image/png");
     expect(fake.uploads[0].bytes.equals(PICTURE)).toBe(true);
+    await page.screenshot({ path: info.outputPath("tray-1280-light.png") });
 
     const runId = "run-live";
     const conversationId = "conv-new";
@@ -580,7 +604,7 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
   }
 });
 
-test("a running task can be stopped, and a chat can be deleted after a confirmation", async ({ page, request }) => {
+test("a running task can be stopped, and a chat can be deleted after a confirmation", async ({ page, request }, info: TestInfo) => {
   const fake = new FakeAgent();
   await fake.start();
   try {
@@ -614,6 +638,7 @@ test("a running task can be stopped, and a chat can be deleted after a confirmat
     await page.getByRole("button", { name: "Delete chat Fix the login copy" }).click();
     const dialog = page.getByRole("dialog", { name: "Delete this chat?" });
     await expect(dialog).toBeVisible();
+    await page.screenshot({ path: info.outputPath("delete-confirm-1280-light.png") });
     expect(fake.calls("DELETE", /conversations/)).toHaveLength(0);
     await dialog.getByRole("button", { name: "Delete", exact: true }).click();
     await expect(page.getByText("What should the agent work on?")).toBeVisible();

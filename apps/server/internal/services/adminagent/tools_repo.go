@@ -376,7 +376,7 @@ func (g *githubAPI) writeTarget(args toolArgs) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	if err := checkWritablePath(filePath); err != nil {
+	if err := g.checkWritablePath(filePath); err != nil {
 		return "", "", err
 	}
 	return branch, filePath, nil

@@ -20,25 +20,20 @@ func (s *Service) liveFor(runID string) *liveBuffer {
 	return buffer
 }
 
-func (s *Service) appendLive(runID, delta string) {
-	if delta == "" {
-		return
-	}
+// setLive replaces the visible text of the turn that is streaming. The version
+// changes only when the text does, so a reader sends an update only then.
+func (s *Service) setLive(runID, text string) {
 	buffer := s.liveFor(runID)
 	buffer.mu.Lock()
-	buffer.text += delta
-	buffer.version++
+	if buffer.text != text {
+		buffer.text = text
+		buffer.version++
+	}
 	buffer.mu.Unlock()
 }
 
 func (s *Service) resetLive(runID string) {
-	buffer := s.liveFor(runID)
-	buffer.mu.Lock()
-	if buffer.text != "" {
-		buffer.text = ""
-		buffer.version++
-	}
-	buffer.mu.Unlock()
+	s.setLive(runID, "")
 }
 
 func (s *Service) dropLive(runID string) {

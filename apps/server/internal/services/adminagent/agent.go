@@ -313,16 +313,22 @@ func (s *Service) runAgentLoop(ctx context.Context, chat ai.ChatGenerator, state
 			return outcome
 		}
 		compactMessages(state.messages)
+		// Reasoning that a model writes into its answer is hidden from the
+		// reader, but the model still gets its own words back in the history.
+		var streamed strings.Builder
 		result, err := chat.Chat(ctx, ai.ChatRequest{
 			Model: state.model.ID, Messages: state.messages, Tools: definitions,
 			MaxOutputTokens: agentMaxTokens, ReasoningEffort: state.effort,
-		}, func(delta string) { s.appendLive(runID, delta) })
+		}, func(delta string) {
+			streamed.WriteString(delta)
+			s.setLive(runID, stripReasoning(streamed.String(), true))
+		})
 		if err != nil {
 			s.resetLive(runID)
 			return s.failureOutcome(ctx, err)
 		}
 		state.addUsage(result.Usage)
-		text := strings.TrimSpace(result.Text)
+		text := strings.TrimSpace(stripReasoning(result.Text, false))
 		if text != "" {
 			s.emit(ctx, runID, fmt.Sprintf("text-%d", step), "text", text, nil)
 		}

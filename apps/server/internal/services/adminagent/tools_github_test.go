@@ -192,6 +192,9 @@ func TestWritesNeverReachTheDefaultBranchSecretsOrReadOnlyRuns(t *testing.T) {
 		{"default branch", "repo_write", map[string]any{"branch": "main", "path": "a.txt", "content": "x"}, "pull request"},
 		{"environment file", "repo_write", map[string]any{"branch": "agent/x", "path": "apps/.env.production", "content": "A=1"}, "never committed"},
 		{"private key file", "repo_write", map[string]any{"branch": "agent/x", "path": "deploy/id_rsa", "content": "x"}, "private key"},
+		{"workflow file", "repo_write", map[string]any{"branch": "agent/x", "path": ".github/workflows/exfiltrate.yml", "content": "on: push"}, "run with the repository's secrets"},
+		{"workflow file in another case", "repo_edit", map[string]any{"branch": "agent/x", "path": ".GitHub/Workflows/ci.yml", "old_string": "a", "new_string": "b"}, "run with the repository's secrets"},
+		{"deployment script", "repo_delete", map[string]any{"branch": "agent/x", "path": "deploy/vps/deploy.sh"}, "run with the repository's secrets"},
 		{"git internals", "repo_delete", map[string]any{"branch": "agent/x", "path": ".git/config"}, ".git"},
 		{"path traversal", "repo_write", map[string]any{"branch": "agent/x", "path": "../etc/passwd", "content": "x"}, "segments"},
 		{"bad branch name", "repo_write", map[string]any{"branch": "agent/..x", "path": "a.txt", "content": "x"}, "branch name"},
@@ -393,10 +396,38 @@ func TestActionsToolsReadRunsFailureLogsAndStartWorkflows(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestPipelineFilesAreEditableOnlyWhenTheOwnerAllowsIt(t *testing.T) {
+	service, fake := githubService(t, map[string]fakeRoute{
+		"GET /repos/owner/repo/git/ref/heads/agent/ci":          jsonRoute(200, `{"object":{"sha":"base1234"}}`),
+		"GET /repos/owner/repo/contents/.github/workflows/a.yml": jsonRoute(404, `{"message":"Not Found"}`),
+		"PUT /repos/owner/repo/contents/.github/workflows/a.yml": jsonRoute(201, `{"commit":{"sha":"abcdef1234"}}`),
+	})
+	args := map[string]any{"branch": "agent/ci", "path": ".github/workflows/a.yml", "content": "name: a\n"}
+
+	output, ok := runTool(t, service, AccessFull, "repo_write", args)
+	require.False(t, ok)
+	require.Contains(t, output, "OPENPOST_AGENT_ALLOW_PIPELINE_EDITS")
+	require.Zero(t, fake.total(), "a refused write never reaches GitHub")
+
+	service.AllowPipelineEdits(true)
+	output, ok = runTool(t, service, AccessFull, "repo_write", args)
+	require.True(t, ok, output)
+	require.Len(t, fake.calls("PUT", "/repos/owner/repo/contents/.github/workflows/a.yml"), 1)
+
+	_, ok = runTool(t, service, AccessFull, "repo_write", map[string]any{"branch": "agent/ci", "path": ".github/.env", "content": "A=1"})
+	require.False(t, ok, "allowing pipeline edits never allows credentials")
+}
+
 func TestGenericGitHubToolGuardsTheRepositoryDefaultBranchAndSecrets(t *testing.T) {
 	service, fake := githubService(t, map[string]fakeRoute{
-		"GET /repos/owner/repo/issues":  jsonRoute(200, `[{"number":1}]`),
-		"POST /repos/owner/repo/issues": jsonRoute(201, `{"number":2}`),
+		"GET /repos/owner/repo/issues":                                  jsonRoute(200, `[{"number":1}]`),
+		"POST /repos/owner/repo/issues":                                 jsonRoute(201, `{"number":2}`),
+		"DELETE /repos/owner/repo/git/refs/heads/agent/keys-cleanup":    jsonRoute(204, ``),
+		"GET /repos/owner/repo/contents/a.txt":                          jsonRoute(200, `{}`),
+		"PUT /repos/owner/repo/pulls/7/merge":                           jsonRoute(200, `{"merged":true}`),
+		"GET /repos/owner/repo/git/refs/heads/main":                     jsonRoute(200, `{}`),
+		"POST /repos/owner/repo/git/refs":                               jsonRoute(201, `{}`),
+		"PATCH /repos/owner/repo/git/refs/heads/maintenance-fix":        jsonRoute(200, `{}`),
 	})
 
 	output, ok := runTool(t, service, AccessReadOnly, "github_api", map[string]any{"path": "/repos/{repo}/issues"})
@@ -407,6 +438,25 @@ func TestGenericGitHubToolGuardsTheRepositoryDefaultBranchAndSecrets(t *testing.
 	})
 	require.True(t, ok, output)
 	require.JSONEq(t, `{"title":"Track the login bug"}`, string(fake.calls("POST", "/repos/owner/repo/issues")[0].body))
+
+	allowedCalls := []struct {
+		name string
+		args map[string]any
+	}{
+		{"reading files and refs", map[string]any{"path": "/repos/owner/repo/contents/a.txt"}},
+		{"reading the default branch ref", map[string]any{"path": "/repos/owner/repo/git/refs/heads/main"}},
+		{"merging a pull request", map[string]any{"method": "PUT", "path": "/repos/owner/repo/pulls/7/merge"}},
+		{"creating a branch", map[string]any{"method": "POST", "path": "/repos/owner/repo/git/refs", "body": map[string]any{"ref": "refs/heads/agent/x", "sha": "abc"}}},
+		{"a branch named after a protected section", map[string]any{"method": "DELETE", "path": "/repos/owner/repo/git/refs/heads/agent/keys-cleanup"}},
+		{"a branch that only starts like the default branch", map[string]any{"method": "PATCH", "path": "/repos/owner/repo/git/refs/heads/maintenance-fix", "body": map[string]any{"force": true}}},
+	}
+	for _, testCase := range allowedCalls {
+		t.Run("allows "+testCase.name, func(t *testing.T) {
+			output, ok := runTool(t, service, AccessFull, "github_api", testCase.args)
+			require.True(t, ok, output)
+			require.Contains(t, output, "HTTP 2")
+		})
+	}
 	allowed := fake.total()
 
 	blocked := []struct {
@@ -419,9 +469,25 @@ func TestGenericGitHubToolGuardsTheRepositoryDefaultBranchAndSecrets(t *testing.
 		{"repository settings", AccessFull, map[string]any{"method": "PATCH", "path": "/repos/owner/repo", "body": map[string]any{"private": true}}, "repository itself"},
 		{"repository deletion", AccessFull, map[string]any{"method": "DELETE", "path": "/repos/owner/repo"}, "repository itself"},
 		{"secrets", AccessFull, map[string]any{"method": "PUT", "path": "/repos/owner/repo/actions/secrets/KEY", "body": map[string]any{"encrypted_value": "x"}}, "secrets"},
+		{"variables", AccessFull, map[string]any{"method": "POST", "path": "/repos/owner/repo/actions/variables", "body": map[string]any{"name": "A", "value": "b"}}, "secrets and variables"},
+		{"environment secrets", AccessFull, map[string]any{"method": "PUT", "path": "/repos/owner/repo/environments/prod/secrets/KEY"}, "environments"},
+		{"webhooks", AccessFull, map[string]any{"method": "POST", "path": "/repos/owner/repo/hooks", "body": map[string]any{"config": map[string]any{"url": "https://example.com"}}}, "webhooks"},
+		{"deploy keys", AccessFull, map[string]any{"method": "POST", "path": "/repos/owner/repo/keys", "body": map[string]any{"key": "ssh-ed25519 AAAA"}}, "deploy keys"},
+		{"collaborators", AccessFull, map[string]any{"method": "PUT", "path": "/repos/owner/repo/collaborators/someone"}, "collaborators"},
+		{"workflow permissions", AccessFull, map[string]any{"method": "PUT", "path": "/repos/owner/repo/actions/permissions", "body": map[string]any{"enabled": true}}, "managed by the administrator"},
 		{"default branch ref", AccessFull, map[string]any{"method": "PATCH", "path": "/repos/owner/repo/git/refs/heads/main", "body": map[string]any{"force": true}}, "pull requests"},
-		{"contents without a branch", AccessFull, map[string]any{"method": "PUT", "path": "/repos/owner/repo/contents/a.txt", "body": map[string]any{"message": "m", "content": "eA=="}}, "branch other than main"},
-		{"contents on the default branch", AccessFull, map[string]any{"method": "DELETE", "path": "/repos/owner/repo/contents/a.txt", "body": map[string]any{"branch": "main", "sha": "x", "message": "m"}}, "branch other than main"},
+		{"default branch protection", AccessFull, map[string]any{"method": "PUT", "path": "/repos/owner/repo/branches/main/protection"}, "pull requests"},
+		{"default branch rename", AccessFull, map[string]any{"method": "POST", "path": "/repos/owner/repo/branches/main/rename", "body": map[string]any{"new_name": "x"}}, "pull requests"},
+		{"merging into the default branch directly", AccessFull, map[string]any{"method": "POST", "path": "/repos/owner/repo/merges", "body": map[string]any{"base": "main", "head": "agent/x"}}, "pull requests"},
+		{"syncing the default branch from upstream", AccessFull, map[string]any{"method": "POST", "path": "/repos/owner/repo/merge-upstream", "body": map[string]any{"branch": "main"}}, "pull requests"},
+		{"file contents on a feature branch", AccessFull, map[string]any{"method": "PUT", "path": "/repos/owner/repo/contents/.github/workflows/x.yml", "body": map[string]any{"message": "m", "content": "eA==", "branch": "agent/x"}}, "repo_write"},
+		{"file contents on the default branch", AccessFull, map[string]any{"method": "DELETE", "path": "/repos/owner/repo/contents/a.txt", "body": map[string]any{"branch": "main", "sha": "x", "message": "m"}}, "repo_write"},
+		{"raw git blobs", AccessFull, map[string]any{"method": "POST", "path": "/repos/owner/repo/git/blobs", "body": map[string]any{"content": "x"}}, "repo_write"},
+		{"raw git trees", AccessFull, map[string]any{"method": "POST", "path": "/repos/owner/repo/git/trees", "body": map[string]any{"tree": []any{}}}, "repo_write"},
+		{"raw git commits", AccessFull, map[string]any{"method": "POST", "path": "/repos/owner/repo/git/commits", "body": map[string]any{"message": "m"}}, "repo_write"},
+		{"an encoded path", AccessFull, map[string]any{"method": "PUT", "path": "/repos/owner/repo/%63ontents/a.txt", "body": map[string]any{"branch": "agent/x"}}, "plain endpoint path"},
+		{"a path that climbs out of its section", AccessFull, map[string]any{"method": "POST", "path": "/repos/owner/repo/issues/../hooks"}, "plain endpoint path"},
+		{"a query inside the path", AccessFull, map[string]any{"method": "POST", "path": "/repos/owner/repo/issues?x=/../hooks"}, "plain endpoint path"},
 		{"another repository", AccessFull, map[string]any{"path": "/repos/someone/else/issues"}, "only /repos/owner/repo"},
 		{"account endpoints", AccessFull, map[string]any{"path": "/user/keys"}, "only /repos/owner/repo"},
 		{"credential in a body", AccessFull, map[string]any{"method": "POST", "path": "/repos/owner/repo/issues", "body": map[string]any{"body": "ghp_abcdefghijklmnopqrstuvwxyz0123456789"}}, "credential"},

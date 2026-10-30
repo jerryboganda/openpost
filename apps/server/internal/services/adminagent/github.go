@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,11 @@ type githubAPI struct {
 	branch     string
 	base       string
 	client     *http.Client
+
+	// pipelineEdits lets the agent change the workflows and deployment files.
+	// They run with the repository's secrets, so it is off unless the owner
+	// turns it on.
+	pipelineEdits bool
 
 	mu        sync.Mutex
 	treeCache map[string][]string
@@ -81,6 +87,16 @@ func (s *Service) SetGitHub(token, repository, defaultBranch string) error {
 	}
 	s.github = api
 	return nil
+}
+
+// AllowPipelineEdits lets the agent change the workflows and deployment files.
+// It is off by default. Text the agent reads, such as a stranger's pull request,
+// could try to steer it into adding a workflow that sends out the repository's
+// secrets, so the administrator has to turn this on knowingly.
+func (s *Service) AllowPipelineEdits(allowed bool) {
+	if s.github != nil {
+		s.github.pipelineEdits = allowed
+	}
 }
 
 type githubReply struct {
@@ -229,8 +245,13 @@ func cleanRepoPath(raw string) (string, error) {
 	return cleaned, nil
 }
 
-// checkWritablePath keeps credentials and repository internals out of commits.
-func checkWritablePath(repoPath string) error {
+// pipelineRoots hold the workflows and deployment files. They run with the
+// repository's secrets, including the key that reaches the production server.
+var pipelineRoots = []string{".github/", "deploy/"}
+
+// checkWritablePath keeps credentials and repository internals out of commits,
+// and keeps the delivery pipeline out of reach unless the owner allowed it.
+func (g *githubAPI) checkWritablePath(repoPath string) error {
 	lower := strings.ToLower(repoPath)
 	base := path.Base(lower)
 	switch {
@@ -240,6 +261,16 @@ func checkWritablePath(repoPath string) error {
 		return errors.New("environment files hold secrets and are never committed")
 	case strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") || base == "id_rsa" || base == "id_ed25519":
 		return errors.New("private key files are never committed")
+	}
+	if g.pipelineEdits {
+		return nil
+	}
+	for _, root := range pipelineRoots {
+		if strings.HasPrefix(lower+"/", root) {
+			return errors.New("workflows and deployment files under .github and deploy run with the repository's secrets, " +
+				"so the agent does not change them. Ask the administrator to make this change, " +
+				"or to set OPENPOST_AGENT_ALLOW_PIPELINE_EDITS=true")
+		}
 	}
 	return nil
 }
@@ -420,9 +451,26 @@ func (g *githubAPI) treePaths(ctx context.Context, ref string) ([]string, bool, 
 	return paths, payload.Truncated, nil
 }
 
-// apiGuard blocks the few requests that could destroy the repository or bypass
-// the pull request flow. Everything else the administrator may do is allowed.
-func (g *githubAPI) apiGuard(method, endpoint string, body map[string]any) error {
+var (
+	// Secrets and variables are managed by the administrator.
+	secretSections = []string{"actions/secrets", "actions/variables"}
+	// These settings decide who can reach the repository and what runs with its
+	// secrets, so a prompt that steers the agent cannot widen access.
+	settingSections = []string{
+		"hooks", "keys", "collaborators", "invitations", "environments", "rulesets", "autolinks",
+		"actions/permissions", "actions/runners", "dependabot", "codespaces", "pages", "transfer",
+	}
+	// Code is written through repo_write, repo_edit, and repo_delete, which check
+	// the path and the content. The raw endpoints would skip those checks.
+	codeSections = []string{"contents", "git/blobs", "git/trees", "git/commits", "git/tags"}
+	// These change the default branch without a pull request.
+	directMergeSections = []string{"merges", "merge-upstream"}
+)
+
+// apiGuard blocks the requests that could destroy the repository, widen who can
+// reach it, or bypass the pull request flow and the checks the repo tools make.
+// Everything else the administrator may do is allowed.
+func (g *githubAPI) apiGuard(method, endpoint string) error {
 	prefix := "/repos/" + g.repository
 	if endpoint != prefix && !strings.HasPrefix(endpoint, prefix+"/") &&
 		!strings.HasPrefix(endpoint, "/search/") && endpoint != "/rate_limit" {
@@ -431,20 +479,42 @@ func (g *githubAPI) apiGuard(method, endpoint string, body map[string]any) error
 	if method == http.MethodGet {
 		return nil
 	}
+	if strings.ContainsAny(endpoint, "%\\?#") || strings.Contains(endpoint, "..") || strings.Contains(endpoint, "//") {
+		return errors.New("a request that changes something needs a plain endpoint path without encoded characters; pass query parameters separately")
+	}
 	lower := strings.ToLower(strings.TrimSuffix(endpoint, "/"))
-	switch {
-	case lower == strings.ToLower(prefix):
+	if lower == strings.ToLower(prefix) {
 		return errors.New("changing, transferring, or deleting the repository itself is not allowed")
-	case strings.Contains(lower, "/actions/secrets") || strings.Contains(lower, "/actions/variables"):
+	}
+	return g.guardSection(strings.Trim(strings.TrimPrefix(lower, strings.ToLower(prefix)), "/"))
+}
+
+// guardSection checks the part of a repository endpoint after /repos/owner/name.
+// It compares whole path segments, so a branch named after a section is fine.
+func (g *githubAPI) guardSection(rest string) error {
+	parts := strings.SplitN(rest, "/", 3)
+	first, pair := parts[0], parts[0]
+	if len(parts) > 1 {
+		pair = first + "/" + parts[1]
+	}
+	in := func(sections []string) bool { return slices.Contains(sections, first) || slices.Contains(sections, pair) }
+	branch := strings.ToLower(g.branch)
+	switch {
+	case in(secretSections):
 		return errors.New("secrets and variables are managed by the administrator, not by the agent")
-	case strings.Contains(lower, "/git/refs/heads/"+strings.ToLower(g.branch)),
-		strings.Contains(lower, "/branches/"+strings.ToLower(g.branch)+"/protection"):
+	case in(settingSections):
+		return errors.New("webhooks, deploy keys, collaborators, environments, rulesets, and similar settings are managed by the administrator, not by the agent")
+	case in(codeSections):
+		return errors.New("file changes go through repo_write, repo_edit, and repo_delete, which check the path and the content")
+	case in(directMergeSections),
+		underPath(rest, "git/refs/heads/"+branch),
+		underPath(rest, "branches/"+branch):
 		return fmt.Errorf("the %s branch is changed only through merged pull requests", g.branch)
-	case strings.Contains(lower, "/contents/"):
-		branch, _ := body["branch"].(string)
-		if strings.TrimSpace(branch) == "" || strings.EqualFold(strings.TrimSpace(branch), g.branch) {
-			return fmt.Errorf("file changes need a branch other than %s", g.branch)
-		}
 	}
 	return nil
+}
+
+// underPath reports whether rest is base or lies below it.
+func underPath(rest, base string) bool {
+	return rest == base || strings.HasPrefix(rest, base+"/")
 }

@@ -10356,7 +10356,7 @@
 	"agent_access": "Access",
 	"agent_access_full": "Full access",
 	"agent_access_read_only": "Read only",
-	"agent_keyboard_hint": "Enter to send. Shift+Enter for a new line.",
+	"agent_keyboard_hint": "Enter to send. Shift+Enter for a new line. Esc stops a running task.",
 	"agent_transcript": "Conversation",
 	"agent_working": "Working",
 	"agent_working_for": "Working for {duration}",

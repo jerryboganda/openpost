@@ -599,3 +599,80 @@ func TestRedactionMasksConfiguredSecretsAndCredentialShapes(t *testing.T) {
 	}
 	require.Contains(t, redacted, "plain text stays")
 }
+
+func TestReasoningWrittenIntoAnAnswerNeverReachesTheReader(t *testing.T) {
+	ctx := context.Background()
+	streamed := make(chan struct{})
+	release := make(chan struct{})
+	service, _ := newAgentService(t, func(_ context.Context, _ ai.ChatRequest, onText func(string)) (ai.ChatResult, error) {
+		onText("<think>Check the")
+		onText(" status first.</think>Pro")
+		close(streamed)
+		<-release
+		onText("duction is healthy.")
+		return ai.ChatResult{
+			Text:         "<think>Check the status first.</think>Production is healthy.",
+			FinishReason: "stop",
+			Usage:        scriptedUsage,
+		}, nil
+	})
+	conversation := newAgentConversation(t, service)
+	run, err := startRun(ctx, service, conversation.ID, "Is production healthy?")
+	require.NoError(t, err)
+
+	select {
+	case <-streamed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the model never streamed")
+	}
+	text, _ := service.LiveText(run.ID)
+	require.Equal(t, "Pro", text, "the reasoning stays hidden while the answer streams")
+	close(release)
+
+	finished := waitForTerminalRun(t, service, run.ID)
+	require.Equal(t, string(RunSucceeded), finished.Status)
+	require.Equal(t, "Production is healthy.", finished.Summary)
+	view, err := service.GetConversation(ctx, conversation.ID)
+	require.NoError(t, err)
+	require.Equal(t, "Production is healthy.", view.Messages[len(view.Messages)-1].Content)
+	for _, event := range eventsOf(t, service, run.ID) {
+		require.NotContains(t, event.Message, "<think>", "no event carries the reasoning")
+	}
+}
+
+func TestTheModelGetsItsOwnReasoningBackInTheHistory(t *testing.T) {
+	ctx := context.Background()
+	service, chat := newAgentService(t,
+		func(context.Context, ai.ChatRequest, func(string)) (ai.ChatResult, error) {
+			return ai.ChatResult{
+				Text:         "<think>I need the status.</think>",
+				ToolCalls:    []ai.ToolCall{{ID: "call-1", Name: "prod_status", Arguments: "{}"}},
+				FinishReason: "tool_calls",
+				Usage:        scriptedUsage,
+			}, nil
+		},
+		answer("Healthy."),
+	)
+	conversation := newAgentConversation(t, service)
+	run, err := startRun(ctx, service, conversation.ID, "Is production healthy?")
+	require.NoError(t, err)
+	require.Equal(t, string(RunSucceeded), waitForTerminalRun(t, service, run.ID).Status)
+
+	requests := chat.snapshot()
+	require.Len(t, requests, 2)
+	echoed := ""
+	for _, message := range requests[1].Messages {
+		if message.Role == ai.ChatRoleAssistant && len(message.ToolCalls) > 0 {
+			echoed = message.Content
+		}
+	}
+	require.Equal(t, "<think>I need the status.</think>", echoed,
+		"models that reason in their answer work better when they get that reasoning back")
+	texts := 0
+	for _, event := range eventsOf(t, service, run.ID) {
+		if event.Kind == "text" {
+			texts++
+		}
+	}
+	require.Equal(t, 1, texts, "a turn that holds only reasoning shows no text, so only the answer is a text event")
+}
