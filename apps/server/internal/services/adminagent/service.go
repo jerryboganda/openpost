@@ -115,7 +115,7 @@ type AgentEvent struct {
 	Seq           int64     `bun:"seq,notnull" json:"seq"`
 	EventKey      string    `bun:"event_key,notnull" json:"-"`
 	Kind          string    `bun:"kind,notnull" json:"kind"`
-	AgentMessage       string    `bun:"message,notnull" json:"message"`
+	AgentMessage  string    `bun:"message,notnull" json:"message"`
 	DataJSON      string    `bun:"data_json,notnull" json:"-"`
 	CreatedAt     time.Time `bun:"created_at,notnull" json:"created_at"`
 }
@@ -135,10 +135,10 @@ type AgentConversationView struct {
 }
 
 type CallbackEvent struct {
-	Key     string          `json:"key"`
-	Kind    string          `json:"kind"`
+	Key          string          `json:"key"`
+	Kind         string          `json:"kind"`
 	AgentMessage string          `json:"message"`
-	Data    json.RawMessage `json:"data,omitempty"`
+	Data         json.RawMessage `json:"data,omitempty"`
 }
 
 type AgentCallback struct {
@@ -796,14 +796,14 @@ func appendEventTx(
 		encoded = string(data)
 	}
 	event := &AgentEvent{
-		ID:        uuid.NewString(),
-		RunID:     runID,
-		Seq:       maxSeq + 1,
-		EventKey:  key,
-		Kind:      kind,
-		AgentMessage:   strings.TrimSpace(message),
-		DataJSON:  encoded,
-		CreatedAt: now,
+		ID:           uuid.NewString(),
+		RunID:        runID,
+		Seq:          maxSeq + 1,
+		EventKey:     key,
+		Kind:         kind,
+		AgentMessage: strings.TrimSpace(message),
+		DataJSON:     encoded,
+		CreatedAt:    now,
 	}
 	_, err := db.NewInsert().Model(event).Exec(ctx)
 	return err
