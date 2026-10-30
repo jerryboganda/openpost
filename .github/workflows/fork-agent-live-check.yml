@@ -1,0 +1,60 @@
+name: Fork Agent Live Check
+
+# Proves that the built-in administrator agent works with the real models. It
+# starts agent runs against the OpenCode Go endpoint, so it needs the
+# OPENCODE_API_KEY secret and runs only when started by hand. Each model must
+# stream, call tools across several steps, and read an image, or hand the image
+# to a model that can. The Go tests skip themselves when the key is missing.
+on:
+  push:
+    # A workflow that is not on the default branch yet cannot be dispatched by
+    # hand, so editing this file runs it on a feature branch.
+    branches:
+      - "feat/**"
+      - "fix/**"
+      - "agent/**"
+    paths:
+      - ".github/workflows/fork-agent-live-check.yml"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch or commit to check
+        required: true
+        default: main
+        type: string
+      models:
+        description: Comma-separated model ids. Leave empty to check every model.
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-agent-live-check-${{ inputs.ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live:
+    name: Live model check
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          sparse-checkout: |
+            /*
+            !/apps/web/static/image-editor-models/
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: apps/server/go.sum
+      - name: Check the models
+        working-directory: apps/server
+        env:
+          OPENPOST_LIVE_AI_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENPOST_LIVE_AI_MODELS: ${{ inputs.models }}
+        run: go test ./internal/services/adminagent -run '^TestLive' -v -count=1 -timeout 35m
