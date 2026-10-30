@@ -95,6 +95,7 @@
 	}
 
 	function onPaste(event: ClipboardEvent) {
+		if (!session.builtIn) return;
 		const files = Array.from(event.clipboardData?.files ?? []).filter((file) =>
 			isAcceptedImage(file.type)
 		);
@@ -216,8 +217,8 @@
 						variant="ghost"
 						size="icon-sm"
 						aria-label={m.agent_attach()}
-						title={m.agent_attach()}
-						disabled={blocked || tray.full}
+						title={session.builtIn ? m.agent_attach() : m.agent_attach_unsupported()}
+						disabled={blocked || tray.full || !session.builtIn}
 						onclick={() => picker?.click()}
 					>
 						<ThemeIcon role="image-add" />

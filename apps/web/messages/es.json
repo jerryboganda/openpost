@@ -10378,5 +10378,6 @@
 	"agent_connection_reconnecting": "Reconnecting",
 	"agent_connection_lost": "Connection lost. The task keeps running.",
 	"agent_connection_retry": "Reconnect",
-	"agent_view_workflow": "View on GitHub Actions"
+	"agent_view_workflow": "View on GitHub Actions",
+	"agent_attach_unsupported": "Images work with the OpenPost Agent. Coding engines on GitHub Actions read text only."
 }

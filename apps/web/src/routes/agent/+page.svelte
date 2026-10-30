@@ -110,7 +110,11 @@
 	}
 
 	function carriesFiles(event: DragEvent): boolean {
-		return unavailableReason === '' && (event.dataTransfer?.types.includes('Files') ?? false);
+		return (
+			unavailableReason === '' &&
+			session.builtIn &&
+			(event.dataTransfer?.types.includes('Files') ?? false)
+		);
 	}
 
 	function onDragOver(event: DragEvent) {

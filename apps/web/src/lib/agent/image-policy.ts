@@ -36,12 +36,13 @@ export function needsCompression(type: string, size: number): boolean {
 	return size > COMPRESS_ABOVE_BYTES && type !== 'image/gif';
 }
 
+export interface ImageSize {
+	width: number;
+	height: number;
+}
+
 /** Scales a size down so its longest edge fits, never up. */
-export function fitWithin(
-	width: number,
-	height: number,
-	edge: number
-): { width: number; height: number } {
+export function fitWithin(width: number, height: number, edge: number): ImageSize {
 	const longest = Math.max(width, height);
 	if (longest <= edge) return { width, height };
 	const scale = edge / longest;

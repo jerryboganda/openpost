@@ -94,7 +94,12 @@ export function foldContext(lines: DiffLine[], keep = 3): DiffLine[] {
 	return folded.length > 0 ? folded : lines;
 }
 
-export function countChanges(lines: DiffLine[]): { added: number; removed: number } {
+interface ChangeCounts {
+	added: number;
+	removed: number;
+}
+
+export function countChanges(lines: DiffLine[]): ChangeCounts {
 	let added = 0;
 	let removed = 0;
 	for (const line of lines) {

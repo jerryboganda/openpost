@@ -6,13 +6,14 @@ import {
 	compressedName,
 	fitWithin,
 	isAcceptedImage,
-	needsCompression
+	needsCompression,
+	type ImageSize
 } from './image-policy';
 import type { AgentAttachment } from './types';
 
 async function encodeJpeg(
 	bitmap: ImageBitmap,
-	size: { width: number; height: number },
+	size: ImageSize,
 	quality: number
 ): Promise<Blob | null> {
 	const canvas = document.createElement('canvas');

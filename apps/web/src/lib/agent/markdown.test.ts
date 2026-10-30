@@ -248,7 +248,7 @@ describe('inline parsing', () => {
 				href: 'https://example.com/path',
 				children: [text('https://example.com/path')]
 			},
-			text(' then ('),
+			text(', then ('),
 			{ type: 'link', href: 'https://example.com/x', children: [text('https://example.com/x')] },
 			text(').')
 		]);
