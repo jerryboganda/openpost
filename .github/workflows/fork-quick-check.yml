@@ -60,9 +60,12 @@ jobs:
         working-directory: apps/server
         run: |
           status=0
-          go test ./internal/ai/... ./internal/services/adminagent/... ./internal/operational/... || status=1
+          go test ./internal/ai/... ./internal/operational/... || status=1
+          # The agent runs work in the background, so these run several times and
+          # under the race detector to catch ordering bugs that pass by luck.
+          go test -race -count=3 ./internal/services/adminagent/... || status=1
           go test ./internal/api || status=1
-          go test ./internal/api/handlers -run 'AdminAgent|AIDiagnostic' || status=1
+          go test -race -count=15 ./internal/api/handlers -run 'AdminAgent|AIDiagnostic' || status=1
           exit "$status"
 
   backend-lint:
