@@ -58,8 +58,16 @@ describe('diffLines', () => {
 describe('foldContext', () => {
 	it('keeps three lines around a change and folds the rest with their count', () => {
 		const lines = diffLines(
-			[...Array.from({ length: 10 }, (_, index) => `top ${index}`), 'old', ...Array.from({ length: 10 }, (_, index) => `bottom ${index}`)].join('\n'),
-			[...Array.from({ length: 10 }, (_, index) => `top ${index}`), 'new', ...Array.from({ length: 10 }, (_, index) => `bottom ${index}`)].join('\n')
+			[
+				...Array.from({ length: 10 }, (_, index) => `top ${index}`),
+				'old',
+				...Array.from({ length: 10 }, (_, index) => `bottom ${index}`)
+			].join('\n'),
+			[
+				...Array.from({ length: 10 }, (_, index) => `top ${index}`),
+				'new',
+				...Array.from({ length: 10 }, (_, index) => `bottom ${index}`)
+			].join('\n')
 		);
 		const folded = foldContext(lines);
 		expect(folded.map((line) => line.kind)).toEqual([

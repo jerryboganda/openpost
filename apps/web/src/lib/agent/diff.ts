@@ -1,8 +1,6 @@
 type DiffKind = 'context' | 'add' | 'remove';
 
-type DiffLine =
-	| { kind: DiffKind; text: string }
-	| { kind: 'gap'; text: string; hidden: number };
+type DiffLine = { kind: DiffKind; text: string } | { kind: 'gap'; text: string; hidden: number };
 
 // Beyond this many table cells the exact diff costs more than it helps, so the
 // whole block shows as removed and added.

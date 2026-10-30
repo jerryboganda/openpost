@@ -69,7 +69,10 @@ describe('buildTranscript', () => {
 				],
 				runs: [run('r1', 'succeeded', { model: 'kimi-k3' })],
 				events: [
-					event('r1', 1, 'status', 'Working with Kimi K3', { model: 'kimi-k3', tools: ['repo_read'] }),
+					event('r1', 1, 'status', 'Working with Kimi K3', {
+						model: 'kimi-k3',
+						tools: ['repo_read']
+					}),
 					event('r1', 2, 'text', "I'll read it."),
 					event('r1', 3, 'tool_call', 'Read a.go', {
 						key: '1-0',
@@ -107,7 +110,11 @@ describe('buildTranscript', () => {
 
 	it('keeps a tool running until its result arrives and stops it with the run', () => {
 		const events = [
-			event('r1', 1, 'tool_call', 'List the repository', { key: '1-0', name: 'repo_tree', arguments: {} })
+			event('r1', 1, 'tool_call', 'List the repository', {
+				key: '1-0',
+				name: 'repo_tree',
+				arguments: {}
+			})
 		];
 		const running = buildTranscript(
 			conversation({
@@ -163,7 +170,10 @@ describe('buildTranscript', () => {
 		const [turn] = buildTranscript(
 			conversation({
 				engine: 'codex',
-				messages: [message('m1', 'user', 'Ship it', 'r1'), message('m2', 'assistant', 'Opened PR 7.', 'r1')],
+				messages: [
+					message('m1', 'user', 'Ship it', 'r1'),
+					message('m2', 'assistant', 'Opened PR 7.', 'r1')
+				],
 				runs: [run('r1', 'succeeded', { engine: 'codex' })],
 				events: [event('r1', 1, 'progress', 'Installing the engine')]
 			}),

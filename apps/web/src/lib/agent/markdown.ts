@@ -563,7 +563,10 @@ function parseInline(source: string): InlineNode[] {
 				continue;
 			}
 		}
-		if ((char === 'h' || char === 'H') && source.slice(index + 1, index + 4).toLowerCase() === 'ttp') {
+		if (
+			(char === 'h' || char === 'H') &&
+			source.slice(index + 1, index + 4).toLowerCase() === 'ttp'
+		) {
 			const url = readBareUrl(source, index);
 			if (url) {
 				flush();

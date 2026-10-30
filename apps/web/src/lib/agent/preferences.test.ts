@@ -19,11 +19,13 @@ describe('normalizePreferences', () => {
 	});
 
 	it('falls back to the default model when the saved one is gone', () => {
-		expect(normalizePreferences({ model: 'retired-model' }, models, 'deepseek-v4.1-flash')).toEqual({
-			model: 'deepseek-v4.1-flash',
-			effort: 'auto',
-			access: 'full'
-		});
+		expect(normalizePreferences({ model: 'retired-model' }, models, 'deepseek-v4.1-flash')).toEqual(
+			{
+				model: 'deepseek-v4.1-flash',
+				effort: 'auto',
+				access: 'full'
+			}
+		);
 	});
 
 	it('starts with automatic reasoning and full access when nothing is saved', () => {

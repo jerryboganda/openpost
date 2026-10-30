@@ -55,7 +55,11 @@
 
 	onMount(() => {
 		const refocus = () => {
-			if (document.visibilityState === 'visible' && session.activeRun && session.connection !== 'live') {
+			if (
+				document.visibilityState === 'visible' &&
+				session.activeRun &&
+				session.connection !== 'live'
+			) {
 				void session.resume();
 			}
 		};

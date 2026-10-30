@@ -59,9 +59,7 @@
 				{m.agent_tool_running()}
 			</span>
 		{:else if step.state === 'error'}
-			<span
-				class="flex shrink-0 items-center gap-1.5 text-xs text-action-destructive-foreground"
-			>
+			<span class="flex shrink-0 items-center gap-1.5 text-xs text-action-destructive-foreground">
 				<ProtectedIcon icon="error" class="size-3.5" />
 				{m.agent_tool_failed()}
 			</span>

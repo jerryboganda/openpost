@@ -398,7 +398,7 @@ func TestActionsToolsReadRunsFailureLogsAndStartWorkflows(t *testing.T) {
 
 func TestPipelineFilesAreEditableOnlyWhenTheOwnerAllowsIt(t *testing.T) {
 	service, fake := githubService(t, map[string]fakeRoute{
-		"GET /repos/owner/repo/git/ref/heads/agent/ci":          jsonRoute(200, `{"object":{"sha":"base1234"}}`),
+		"GET /repos/owner/repo/git/ref/heads/agent/ci":           jsonRoute(200, `{"object":{"sha":"base1234"}}`),
 		"GET /repos/owner/repo/contents/.github/workflows/a.yml": jsonRoute(404, `{"message":"Not Found"}`),
 		"PUT /repos/owner/repo/contents/.github/workflows/a.yml": jsonRoute(201, `{"commit":{"sha":"abcdef1234"}}`),
 	})
@@ -420,14 +420,14 @@ func TestPipelineFilesAreEditableOnlyWhenTheOwnerAllowsIt(t *testing.T) {
 
 func TestGenericGitHubToolGuardsTheRepositoryDefaultBranchAndSecrets(t *testing.T) {
 	service, fake := githubService(t, map[string]fakeRoute{
-		"GET /repos/owner/repo/issues":                                  jsonRoute(200, `[{"number":1}]`),
-		"POST /repos/owner/repo/issues":                                 jsonRoute(201, `{"number":2}`),
-		"DELETE /repos/owner/repo/git/refs/heads/agent/keys-cleanup":    jsonRoute(204, ``),
-		"GET /repos/owner/repo/contents/a.txt":                          jsonRoute(200, `{}`),
-		"PUT /repos/owner/repo/pulls/7/merge":                           jsonRoute(200, `{"merged":true}`),
-		"GET /repos/owner/repo/git/refs/heads/main":                     jsonRoute(200, `{}`),
-		"POST /repos/owner/repo/git/refs":                               jsonRoute(201, `{}`),
-		"PATCH /repos/owner/repo/git/refs/heads/maintenance-fix":        jsonRoute(200, `{}`),
+		"GET /repos/owner/repo/issues":                               jsonRoute(200, `[{"number":1}]`),
+		"POST /repos/owner/repo/issues":                              jsonRoute(201, `{"number":2}`),
+		"DELETE /repos/owner/repo/git/refs/heads/agent/keys-cleanup": jsonRoute(204, ``),
+		"GET /repos/owner/repo/contents/a.txt":                       jsonRoute(200, `{}`),
+		"PUT /repos/owner/repo/pulls/7/merge":                        jsonRoute(200, `{"merged":true}`),
+		"GET /repos/owner/repo/git/refs/heads/main":                  jsonRoute(200, `{}`),
+		"POST /repos/owner/repo/git/refs":                            jsonRoute(201, `{}`),
+		"PATCH /repos/owner/repo/git/refs/heads/maintenance-fix":     jsonRoute(200, `{}`),
 	})
 
 	output, ok := runTool(t, service, AccessReadOnly, "github_api", map[string]any{"path": "/repos/{repo}/issues"})

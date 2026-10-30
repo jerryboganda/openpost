@@ -27,7 +27,9 @@ describe('block parsing', () => {
 	});
 
 	it('keeps fenced code literal and records whether the fence closed', () => {
-		const closed = parseMarkdown('Intro\n\n```ts\nconst a = **1**;\n\n# not a heading\n```\n\nAfter');
+		const closed = parseMarkdown(
+			'Intro\n\n```ts\nconst a = **1**;\n\n# not a heading\n```\n\nAfter'
+		);
 		expect(closed).toEqual([
 			{ type: 'paragraph', children: [text('Intro')] },
 			{
@@ -105,9 +107,7 @@ describe('block parsing', () => {
 	});
 
 	it('reads tables with alignment, escaped pipes, and short rows', () => {
-		expect(
-			parseMarkdown('| Name | Count |\n| :--- | ---: |\n| a \\| b | 2 |\n| c |')
-		).toEqual([
+		expect(parseMarkdown('| Name | Count |\n| :--- | ---: |\n| a \\| b | 2 |\n| c |')).toEqual([
 			{
 				type: 'table',
 				align: ['left', 'right'],

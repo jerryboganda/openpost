@@ -48,11 +48,7 @@
 
 <article class="flex flex-col gap-4" data-slot="agent-turn" data-status={run?.status}>
 	{#if turn.user}
-		<AgentUserMessage
-			text={turn.user.content}
-			images={turn.user.attachments ?? []}
-			{onOpenImage}
-		/>
+		<AgentUserMessage text={turn.user.content} images={turn.user.attachments ?? []} {onOpenImage} />
 	{/if}
 	<div class="flex min-w-0 flex-col gap-3">
 		{#each turn.blocks as block (block.id)}
@@ -88,8 +84,7 @@
 						href={run.workflow_url}
 						target="_blank"
 						rel="noopener noreferrer"
-						class="underline underline-offset-2 hover:text-foreground"
-						>{m.agent_view_workflow()}</a
+						class="underline underline-offset-2 hover:text-foreground">{m.agent_view_workflow()}</a
 					>
 				{/if}
 				{#if run.branch}

@@ -91,7 +91,8 @@ function clipInput(text: string): string {
 
 function parseToolInput(value: unknown): string {
 	if (typeof value !== 'object' || value === null) return '';
-	if ('truncated' in value && typeof value.truncated === 'string') return clipInput(value.truncated);
+	if ('truncated' in value && typeof value.truncated === 'string')
+		return clipInput(value.truncated);
 	const text = JSON.stringify(value, null, 2);
 	return text === '{}' ? '' : clipInput(text);
 }
@@ -128,7 +129,8 @@ function buildBlocks(run: AgentRun | null, events: AgentEvent[]): TurnBlock[] {
 	const tools = new Map<string, ToolStep>();
 	for (const event of events) {
 		if (event.kind === 'text') {
-			if (event.message.trim() !== '') blocks.push({ kind: 'text', id: event.id, text: event.message });
+			if (event.message.trim() !== '')
+				blocks.push({ kind: 'text', id: event.id, text: event.message });
 		} else if (event.kind === 'tool_call') {
 			const step = toolFromCall(event, finished);
 			tools.set(step.key, step);

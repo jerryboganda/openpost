@@ -15,7 +15,8 @@
 	const lines = $derived(isDiff ? code.split('\n') : []);
 
 	function lineClass(line: string): string {
-		if (line.startsWith('+') && !line.startsWith('+++')) return 'bg-success text-success-foreground';
+		if (line.startsWith('+') && !line.startsWith('+++'))
+			return 'bg-success text-success-foreground';
 		if (line.startsWith('-') && !line.startsWith('---')) {
 			return 'bg-action-destructive text-action-destructive-foreground';
 		}

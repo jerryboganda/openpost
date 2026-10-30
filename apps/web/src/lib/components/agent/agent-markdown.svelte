@@ -78,8 +78,7 @@
 								<th
 									scope="col"
 									class="border-b px-3 py-1.5 font-semibold"
-									style:text-align={block.align[column] ?? undefined}
-									>{@render inline(cell)}</th
+									style:text-align={block.align[column] ?? undefined}>{@render inline(cell)}</th
 								>
 							{/each}
 						</tr>
@@ -90,8 +89,7 @@
 								{#each row as cell, column (column)}
 									<td
 										class="px-3 py-1.5 align-top"
-										style:text-align={block.align[column] ?? undefined}
-										>{@render inline(cell)}</td
+										style:text-align={block.align[column] ?? undefined}>{@render inline(cell)}</td
 									>
 								{/each}
 							</tr>

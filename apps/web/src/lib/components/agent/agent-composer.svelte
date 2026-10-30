@@ -274,7 +274,9 @@
 							class={cn(triggerClass, 'order-2')}
 							aria-label={m.agent_model()}
 						>
-							<span class="truncate">{session.selectedModel?.label ?? session.preferences.model}</span>
+							<span class="truncate"
+								>{session.selectedModel?.label ?? session.preferences.model}</span
+							>
 						</Select.Trigger>
 						<Select.Content>
 							{#each session.models as option (option.id)}

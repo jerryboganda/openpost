@@ -497,7 +497,9 @@ func (g *githubAPI) guardSection(rest string) error {
 	if len(parts) > 1 {
 		pair = first + "/" + parts[1]
 	}
-	in := func(sections []string) bool { return slices.Contains(sections, first) || slices.Contains(sections, pair) }
+	in := func(sections []string) bool {
+		return slices.Contains(sections, first) || slices.Contains(sections, pair)
+	}
 	branch := strings.ToLower(g.branch)
 	switch {
 	case in(secretSections):

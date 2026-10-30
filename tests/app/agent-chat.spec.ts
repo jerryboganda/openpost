@@ -32,8 +32,10 @@ function screenshotPng(width: number, height: number): Buffer {
   for (let y = 0; y < height; y += 1) {
     const row = y * (width * 3 + 1);
     for (let x = 0; x < width; x += 1) {
-      const inPanel = x > width * 0.15 && x < width * 0.85 && y > height * 0.35 && y < height * 0.85;
-      const [red, green, blue] = y < height * 0.18 ? [40, 90, 200] : inPanel ? [255, 255, 255] : [230, 232, 236];
+      const inPanel =
+        x > width * 0.15 && x < width * 0.85 && y > height * 0.35 && y < height * 0.85;
+      const [red, green, blue] =
+        y < height * 0.18 ? [40, 90, 200] : inPanel ? [255, 255, 255] : [230, 232, 236];
       rows[row + 1 + x * 3] = red;
       rows[row + 2 + x * 3] = green;
       rows[row + 3 + x * 3] = blue;
@@ -58,8 +60,18 @@ const START = Date.now() - 2 * 60 * 1000;
 const iso = (seconds: number) => new Date(START + seconds * 1000).toISOString();
 
 const MODELS = [
-  { id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash", description: "Fast and low cost. Reads images.", vision: true },
-  { id: "kimi-k3", label: "Kimi K3", description: "Strong at long multi-step tasks. Reads images.", vision: true },
+  {
+    id: "deepseek-v4.1-flash",
+    label: "DeepSeek V4.1 Flash",
+    description: "Fast and low cost. Reads images.",
+    vision: true,
+  },
+  {
+    id: "kimi-k3",
+    label: "Kimi K3",
+    description: "Strong at long multi-step tasks. Reads images.",
+    vision: true,
+  },
   { id: "glm-5.3", label: "GLM 5.3", description: "Text only.", vision: false },
 ];
 
@@ -69,7 +81,12 @@ const ENGINES = {
   engines: [
     { id: "assistant", label: "OpenPost Agent", available: true },
     { id: "opencode", label: "OpenCode on GitHub Actions", available: true },
-    { id: "codex", label: "Codex on GitHub Actions", available: false, reason: "Add the OPENAI_API_KEY secret." },
+    {
+      id: "codex",
+      label: "Codex on GitHub Actions",
+      available: false,
+      reason: "Add the OPENAI_API_KEY secret.",
+    },
   ],
 };
 
@@ -123,14 +140,37 @@ function run(id: string, status: string, extra: Json = {}): Json {
 }
 
 function event(runId: string, seq: number, kind: string, message: string, data?: Json): Json {
-  return { id: `${runId}-e${seq}`, run_id: runId, seq, kind, message, data, created_at: iso(-60 + seq) };
+  return {
+    id: `${runId}-e${seq}`,
+    run_id: runId,
+    seq,
+    kind,
+    message,
+    data,
+    created_at: iso(-60 + seq),
+  };
 }
 
-function toolCall(runId: string, seq: number, key: string, name: string, label: string, args: Json): Json {
+function toolCall(
+  runId: string,
+  seq: number,
+  key: string,
+  name: string,
+  label: string,
+  args: Json,
+): Json {
   return event(runId, seq, "tool_call", label, { key, name, arguments: args });
 }
 
-function toolResult(runId: string, seq: number, key: string, name: string, output: string, ok = true, ms = 420): Json {
+function toolResult(
+  runId: string,
+  seq: number,
+  key: string,
+  name: string,
+  output: string,
+  ok = true,
+  ms = 420,
+): Json {
   return event(runId, seq, "tool_result", output.split("\n")[0], { key, name, ok, output, ms });
 }
 
@@ -148,7 +188,8 @@ function storedConversation(): Json {
         id: "msg-1",
         conversation_id: conversationId,
         role: "user",
-        content: "The sign-in button copy looks wrong in this screenshot. Fix it and tell me if production is fine.",
+        content:
+          "The sign-in button copy looks wrong in this screenshot. Fix it and tell me if production is fine.",
         run_id: runId,
         created_at: iso(-60),
         attachments: [attachment("att-history", "screenshot.png")],
@@ -172,21 +213,46 @@ function storedConversation(): Json {
       }),
     ],
     events: [
-      event(runId, 1, "status", "Working with DeepSeek V4.1 Flash", { model: "deepseek-v4.1-flash", tools: ["repo_read"] }),
+      event(runId, 1, "status", "Working with DeepSeek V4.1 Flash", {
+        model: "deepseek-v4.1-flash",
+        tools: ["repo_read"],
+      }),
       event(runId, 2, "text", "I'll compare the screenshot with the page code first."),
       toolCall(runId, 3, "1-0", "repo_search", "Search code for sign in", { query: "sign in" }),
-      toolResult(runId, 4, "1-0", "repo_search", "3 match(es) for \"sign in\"\n\napps/web/messages/en.json"),
+      toolResult(
+        runId,
+        4,
+        "1-0",
+        "repo_search",
+        '3 match(es) for "sign in"\n\napps/web/messages/en.json',
+      ),
       toolCall(runId, 5, "2-0", "repo_edit", "Edit apps/web/messages/en.json on agent/fix-copy", {
         branch: "agent/fix-copy",
         path: "apps/web/messages/en.json",
         old_string: '  "login_button": "Signin",\n  "login_title": "Welcome back"',
         new_string: '  "login_button": "Sign in",\n  "login_title": "Welcome back"',
       }),
-      toolResult(runId, 6, "2-0", "repo_edit", "Edited apps/web/messages/en.json on agent/fix-copy: 1 replacement(s). Commit c0ffee1."),
-      toolCall(runId, 7, "3-0", "db_query", "Query: SELECT COUNT(*) AS total FROM users", { sql: "SELECT COUNT(*) AS total FROM users" }),
+      toolResult(
+        runId,
+        6,
+        "2-0",
+        "repo_edit",
+        "Edited apps/web/messages/en.json on agent/fix-copy: 1 replacement(s). Commit c0ffee1.",
+      ),
+      toolCall(runId, 7, "3-0", "db_query", "Query: SELECT COUNT(*) AS total FROM users", {
+        sql: "SELECT COUNT(*) AS total FROM users",
+      }),
       toolResult(runId, 8, "3-0", "db_query", "total\n12"),
       toolCall(runId, 9, "4-0", "ci_status", "List workflow runs", {}),
-      toolResult(runId, 10, "4-0", "ci_status", "Error: GitHub returned 502: Bad Gateway", false, 90),
+      toolResult(
+        runId,
+        10,
+        "4-0",
+        "ci_status",
+        "Error: GitHub returned 502: Bad Gateway",
+        false,
+        90,
+      ),
       event(runId, 11, "text", FINAL_ANSWER),
     ],
   };
@@ -250,7 +316,9 @@ class FakeAgent {
   }
 
   calls(method: string, pattern: RegExp): Recorded[] {
-    return this.requests.filter((request) => request.method === method && pattern.test(request.path));
+    return this.requests.filter(
+      (request) => request.method === method && pattern.test(request.path),
+    );
   }
 }
 
@@ -316,34 +384,51 @@ async function installFakeAgent(page: Page, fake: FakeAgent) {
         type: request.headers()["content-type"] ?? "",
         bytes: request.postDataBuffer() ?? Buffer.alloc(0),
       });
-      const info = attachment(`att-upload-${fake.uploads.length}`, url.searchParams.get("filename") ?? "image");
+      const info = attachment(
+        `att-upload-${fake.uploads.length}`,
+        url.searchParams.get("filename") ?? "image",
+      );
       return route.fulfill({ status: 201, json: info });
     }
     if (method === "GET" && path.startsWith("/attachments/")) {
       return route.fulfill({ contentType: "image/png", body: PICTURE });
     }
-    return route.fulfill({ status: 404, json: { title: "Not mocked", status: 404, detail: `${method} ${path}` } });
+    return route.fulfill({
+      status: 404,
+      json: { title: "Not mocked", status: 404, detail: `${method} ${path}` },
+    });
   });
 }
 
 async function adminPage(page: Page, request: Parameters<typeof registerUser>[0]) {
   const auth = await registerUser(request, `agent-chat-${randomUUID()}@example.com`);
   await createWorkspace(request, auth.token, "Agent chat");
-  const me = await request.get("/api/v1/auth/me", { headers: { Authorization: `Bearer ${auth.token}` } });
+  const me = await request.get("/api/v1/auth/me", {
+    headers: { Authorization: `Bearer ${auth.token}` },
+  });
   expect(me.ok()).toBe(true);
   const { id } = await me.json();
   const database = `/tmp/openpost-app-e2e-${process.env.OPENPOST_APP_E2E_PORT ?? 18180}.db`;
-  execFileSync("sqlite3", ["-cmd", ".timeout 5000", database, `UPDATE users SET is_admin = 1 WHERE id = '${id}';`]);
+  execFileSync("sqlite3", [
+    "-cmd",
+    ".timeout 5000",
+    database,
+    `UPDATE users SET is_admin = 1 WHERE id = '${id}';`,
+  ]);
   await authenticatePage(page, auth.token);
 }
 
 async function useScheme(page: Page, scheme: "light" | "dark") {
   await page.emulateMedia({ colorScheme: scheme, reducedMotion: "reduce" });
-  await page.evaluate((value) => localStorage.setItem("mode-watcher-mode", value), scheme).catch(() => undefined);
+  await page
+    .evaluate((value) => localStorage.setItem("mode-watcher-mode", value), scheme)
+    .catch(() => undefined);
 }
 
 async function expectNoSidewaysScroll(page: Page) {
-  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth),
+  ).toBeLessThanOrEqual(1);
 }
 
 const composerOf = (page: Page) => page.getByRole("textbox", { name: "Message for the agent" });
@@ -399,7 +484,9 @@ test("a stored conversation reads like a chat: steps, a diff, formatted answer, 
 
     await chatButton(page, "Fix the login copy").click();
     const transcript = transcriptOf(page);
-    await expect(transcript.getByText("The sign-in button copy looks wrong", { exact: false })).toBeVisible();
+    await expect(
+      transcript.getByText("The sign-in button copy looks wrong", { exact: false }),
+    ).toBeVisible();
     await expect(transcript.getByRole("button", { name: "Open screenshot.png" })).toBeVisible();
     await expect(transcript.getByRole("heading", { name: "Result" })).toBeVisible();
     await expect(transcript.getByRole("cell", { name: "passed" })).toBeVisible();
@@ -409,7 +496,9 @@ test("a stored conversation reads like a chat: steps, a diff, formatted answer, 
     );
     await expect(transcript).not.toContainText("**");
     await expect(transcript.getByText("Nothing else changed.")).toHaveCount(1);
-    await expect(transcript.locator("[data-slot='agent-code']")).toContainText("const label = 'Sign in';");
+    await expect(transcript.locator("[data-slot='agent-code']")).toContainText(
+      "const label = 'Sign in';",
+    );
 
     const search = transcript.getByRole("button", { name: /Search code for sign in/ });
     await expect(search).toHaveAttribute("aria-expanded", "false");
@@ -473,7 +562,10 @@ test("a stored conversation reads like a chat: steps, a diff, formatted answer, 
   }
 });
 
-test("a pasted screenshot uploads at once and the run streams into the chat", async ({ page, request }, info: TestInfo) => {
+test("a pasted screenshot uploads at once and the run streams into the chat", async ({
+  page,
+  request,
+}, info: TestInfo) => {
   const fake = new FakeAgent();
   await fake.start();
   try {
@@ -492,7 +584,9 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
       const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
       const data = new DataTransfer();
       data.items.add(new File([bytes], "pasted.png", { type: "image/png" }));
-      element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+      element.dispatchEvent(
+        new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }),
+      );
     }, PICTURE.toString("base64"));
 
     await expect(page.getByRole("status", { name: "Uploading pasted.png" })).toBeVisible();
@@ -523,7 +617,10 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
       attachments: [attachment("att-upload-1", "pasted.png")],
     };
     fake.onMessage = () => {
-      const started = run(runId, "running", { conversation_id: conversationId, started_at: iso(0) });
+      const started = run(runId, "running", {
+        conversation_id: conversationId,
+        started_at: iso(0),
+      });
       fake.conversations.set(conversationId, {
         id: conversationId,
         engine: "assistant",
@@ -532,7 +629,9 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
         updated_at: iso(1),
         messages: [user],
         runs: [started],
-        events: [event(runId, 1, "status", "Working with DeepSeek V4.1 Flash", { tools: ["repo_read"] })],
+        events: [
+          event(runId, 1, "status", "Working with DeepSeek V4.1 Flash", { tools: ["repo_read"] }),
+        ],
       });
       return { run: started };
     };
@@ -547,17 +646,39 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
     fake.push(runId, "live", { text: "Looking at the **screenshot** now" });
     await expect(transcriptOf(page).getByText("Looking at the")).toBeVisible();
     await expect(transcriptOf(page).locator("strong", { hasText: "screenshot" })).toBeVisible();
-    await expect(transcriptOf(page).getByRole("status").filter({ hasText: "Working for" })).toBeVisible();
+    await expect(
+      transcriptOf(page).getByRole("status").filter({ hasText: "Working for" }),
+    ).toBeVisible();
 
     const first = event(runId, 2, "text", "I can see a title bar and one panel.");
     fake.push(runId, "event", first);
     fake.push(runId, "live", { text: "" });
-    await expect(transcriptOf(page).getByText("I can see a title bar and one panel.")).toBeVisible();
+    await expect(
+      transcriptOf(page).getByText("I can see a title bar and one panel."),
+    ).toBeVisible();
 
-    fake.push(runId, "event", toolCall(runId, 3, "1-0", "repo_read", "Read apps/web/src/routes/agent/+page.svelte", { path: "apps/web/src/routes/agent/+page.svelte" }));
-    const step = transcriptOf(page).getByRole("button", { name: /Read apps\/web\/src\/routes\/agent/ });
+    fake.push(
+      runId,
+      "event",
+      toolCall(runId, 3, "1-0", "repo_read", "Read apps/web/src/routes/agent/+page.svelte", {
+        path: "apps/web/src/routes/agent/+page.svelte",
+      }),
+    );
+    const step = transcriptOf(page).getByRole("button", {
+      name: /Read apps\/web\/src\/routes\/agent/,
+    });
     await expect(step).toContainText("Running");
-    fake.push(runId, "event", toolResult(runId, 4, "1-0", "repo_read", "apps/web/src/routes/agent/+page.svelte, lines 1-40 of 300\n1\t<script>"));
+    fake.push(
+      runId,
+      "event",
+      toolResult(
+        runId,
+        4,
+        "1-0",
+        "repo_read",
+        "apps/web/src/routes/agent/+page.svelte, lines 1-40 of 300\n1\t<script>",
+      ),
+    );
     await expect(step).not.toContainText("Running");
     await expect(step).toContainText("0.4s");
     await page.screenshot({ path: info.outputPath("streaming-1280-light.png") });
@@ -572,18 +693,45 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
       updated_at: iso(20),
       messages: [
         user,
-        { id: "msg-live-2", conversation_id: conversationId, role: "assistant", content: answer, run_id: runId, created_at: iso(19) },
+        {
+          id: "msg-live-2",
+          conversation_id: conversationId,
+          role: "assistant",
+          content: answer,
+          run_id: runId,
+          created_at: iso(19),
+        },
       ],
-      runs: [run(runId, "succeeded", { conversation_id: conversationId, finished_at: iso(19), input_tokens: 4200, output_tokens: 310, summary: answer })],
+      runs: [
+        run(runId, "succeeded", {
+          conversation_id: conversationId,
+          finished_at: iso(19),
+          input_tokens: 4200,
+          output_tokens: 310,
+          summary: answer,
+        }),
+      ],
       events: [
         event(runId, 1, "status", "Working with DeepSeek V4.1 Flash", { tools: ["repo_read"] }),
         first,
-        toolCall(runId, 3, "1-0", "repo_read", "Read apps/web/src/routes/agent/+page.svelte", { path: "apps/web/src/routes/agent/+page.svelte" }),
-        toolResult(runId, 4, "1-0", "repo_read", "apps/web/src/routes/agent/+page.svelte, lines 1-40 of 300\n1\t<script>"),
+        toolCall(runId, 3, "1-0", "repo_read", "Read apps/web/src/routes/agent/+page.svelte", {
+          path: "apps/web/src/routes/agent/+page.svelte",
+        }),
+        toolResult(
+          runId,
+          4,
+          "1-0",
+          "repo_read",
+          "apps/web/src/routes/agent/+page.svelte, lines 1-40 of 300\n1\t<script>",
+        ),
         event(runId, 5, "text", answer),
       ],
     });
-    fake.push(runId, "run", run(runId, "succeeded", { conversation_id: conversationId, finished_at: iso(19) }));
+    fake.push(
+      runId,
+      "run",
+      run(runId, "succeeded", { conversation_id: conversationId, finished_at: iso(19) }),
+    );
     fake.push(runId, "done", { status: "succeeded" });
 
     await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
@@ -591,7 +739,9 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
     await expect(transcriptOf(page).getByText("The panel text is cropped.")).toHaveCount(1);
     await expect(transcriptOf(page).locator("strong", { hasText: "Fixed" })).toBeVisible();
     await expect(transcriptOf(page).getByRole("button", { name: "Open pasted.png" })).toBeVisible();
-    await expect(transcriptOf(page).getByRole("status").filter({ hasText: "Working for" })).toHaveCount(0);
+    await expect(
+      transcriptOf(page).getByRole("status").filter({ hasText: "Working for" }),
+    ).toHaveCount(0);
     await expect(chatButton(page, "What is wrong with this screenshot?")).toBeVisible();
 
     const messages = fake.calls("POST", /messages$/);
@@ -611,13 +761,18 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
   }
 });
 
-test("a running task can be stopped, and a chat can be deleted after a confirmation", async ({ page, request }, info: TestInfo) => {
+test("a running task can be stopped, and a chat can be deleted after a confirmation", async ({
+  page,
+  request,
+}, info: TestInfo) => {
   const fake = new FakeAgent();
   await fake.start();
   try {
     const running = storedConversation();
     const runId = "run-history";
-    running.runs = [run(runId, "running", { conversation_id: "conv-history", started_at: iso(-20) })];
+    running.runs = [
+      run(runId, "running", { conversation_id: "conv-history", started_at: iso(-20) }),
+    ];
     running.messages = [(running.messages as Json[])[0]];
     running.events = [event(runId, 1, "text", "Starting the investigation.")];
     fake.conversations.set("conv-history", running);
