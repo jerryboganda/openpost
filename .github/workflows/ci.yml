@@ -1082,7 +1082,17 @@ jobs:
       - name: Check the standalone mobile app
         working-directory: apps/mobile
         run: bun run check
+      - name: Detect a published release tag
+        id: release-identity
+        run: |
+          if [ -n "$(git for-each-ref --count=1 --sort=-version:refname --format='%(refname:short)' 'refs/tags/v*')" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No released v* tag exists in this repository; skipping the release identity comparison."
+          fi
       - name: Check the current Android release identity
+        if: steps.release-identity.outputs.available == 'true'
         working-directory: apps/mobile
         run: |
           latest_tag="$(git for-each-ref --count=1 --sort=-version:refname --format='%(refname:short)' 'refs/tags/v*')"
