@@ -45,7 +45,9 @@ func (s *Service) pullRequestTools() []*toolSpec {
 				"draft":  booleanSchema("Open as a draft."),
 			}),
 			describe: func(a toolArgs) string { return "Open a pull request from " + a.trimmed("branch") },
-			run:      func(ctx context.Context, _ *toolRuntime, a toolArgs) (string, error) { return g.openPullRequest(ctx, a) },
+			run: func(ctx context.Context, _ *toolRuntime, a toolArgs) (string, error) {
+				return g.openPullRequest(ctx, a)
+			},
 		},
 		{
 			name:        "pr_get",
@@ -54,7 +56,9 @@ func (s *Service) pullRequestTools() []*toolSpec {
 				"number": integerSchema("Pull request number."),
 			}),
 			describe: func(a toolArgs) string { return "Check pull request #" + a.trimmed("number") },
-			run:      func(ctx context.Context, _ *toolRuntime, a toolArgs) (string, error) { return g.showPullRequest(ctx, a) },
+			run: func(ctx context.Context, _ *toolRuntime, a toolArgs) (string, error) {
+				return g.showPullRequest(ctx, a)
+			},
 		},
 		{
 			name:        "pr_merge",
@@ -66,7 +70,9 @@ func (s *Service) pullRequestTools() []*toolSpec {
 				"ignore_checks": booleanSchema("Merge even though checks fail or are pending. Use only when the administrator asked for it."),
 			}),
 			describe: func(a toolArgs) string { return "Merge pull request #" + a.trimmed("number") },
-			run:      func(ctx context.Context, _ *toolRuntime, a toolArgs) (string, error) { return g.mergePullRequest(ctx, a) },
+			run: func(ctx context.Context, _ *toolRuntime, a toolArgs) (string, error) {
+				return g.mergePullRequest(ctx, a)
+			},
 		},
 	}
 }

@@ -249,7 +249,7 @@ func TestRepoReadNumbersLinesAndPagesThroughLongFiles(t *testing.T) {
 
 func TestRepoTreeListsDirectoriesAndFindsFilesWithACachedListing(t *testing.T) {
 	service, fake := githubService(t, map[string]fakeRoute{
-		"GET /repos/owner/repo/contents/apps": jsonRoute(200, `[{"name":"web","type":"dir","size":0},{"name":"README.md","type":"file","size":42},{"name":"server","type":"dir","size":0}]`),
+		"GET /repos/owner/repo/contents/apps":      jsonRoute(200, `[{"name":"web","type":"dir","size":0},{"name":"README.md","type":"file","size":42},{"name":"server","type":"dir","size":0}]`),
 		"GET /repos/owner/repo/git/ref/heads/main": jsonRoute(200, `{"object":{"sha":"abc123"}}`),
 		"GET /repos/owner/repo/git/trees/abc123": jsonRoute(200, `{"truncated":false,"tree":[
 			{"path":"apps/web/src/routes/agent/+page.svelte","type":"blob"},
@@ -293,7 +293,7 @@ func TestPullRequestToolsGateMergesOnChecks(t *testing.T) {
 	var checks atomic.Value
 	checks.Store(failing)
 	service, fake := githubService(t, map[string]fakeRoute{
-		"GET /repos/owner/repo/pulls/7": jsonRoute(200, `{"number":7,"title":"Fix login","state":"open","draft":false,"merged":false,"mergeable":true,"mergeable_state":"clean","html_url":"https://github.com/owner/repo/pull/7","additions":5,"deletions":2,"changed_files":1,"user":{"login":"agent"},"head":{"ref":"agent/fix","sha":"deadbeefcafe0000"},"base":{"ref":"main"}}`),
+		"GET /repos/owner/repo/pulls/7":       jsonRoute(200, `{"number":7,"title":"Fix login","state":"open","draft":false,"merged":false,"mergeable":true,"mergeable_state":"clean","html_url":"https://github.com/owner/repo/pull/7","additions":5,"deletions":2,"changed_files":1,"user":{"login":"agent"},"head":{"ref":"agent/fix","sha":"deadbeefcafe0000"},"base":{"ref":"main"}}`),
 		"GET /repos/owner/repo/pulls/7/files": jsonRoute(200, `[{"filename":"apps/a.go","status":"modified","additions":5,"deletions":2}]`),
 		"GET /repos/owner/repo/commits/deadbeefcafe0000/check-runs": func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
