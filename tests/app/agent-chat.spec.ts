@@ -382,11 +382,15 @@ test("a stored conversation reads like a chat: steps, a diff, formatted answer, 
       .soft(
         await composerOf(page).evaluate((element) => {
           const style = getComputedStyle(element);
-          return { outline: style.outlineStyle, border: style.borderTopWidth, shadow: style.boxShadow };
+          // Zero-size layers are how Tailwind writes "no shadow"; any other layer is a visible ring.
+          const ring = style.boxShadow
+            .split(/,\s*(?![^(]*\))/)
+            .some((layer) => !/ 0px 0px 0px 0px$/.test(layer.trim()));
+          return { outline: style.outlineStyle, border: style.borderTopWidth, ring };
         }),
-        "the composer field draws no border, outline, or shadow of its own; its frame shows focus",
+        "the composer field draws no border, outline, or ring of its own; its frame shows focus",
       )
-      .toEqual({ outline: "none", border: "0px", shadow: "none" });
+      .toEqual({ outline: "none", border: "0px", ring: false });
 
     await page.getByRole("button", { name: "Check production health" }).click();
     await expect(composerOf(page)).toHaveValue(/^Check production health\./);
@@ -503,6 +507,9 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
     expect(fake.uploads[0].type).toBe("image/png");
     expect(fake.uploads[0].bytes.equals(PICTURE)).toBe(true);
     await page.screenshot({ path: info.outputPath("tray-1280-light.png") });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: info.outputPath("tray-390-light.png") });
+    await page.setViewportSize({ width: 1280, height: 900 });
 
     const runId = "run-live";
     const conversationId = "conv-new";
@@ -631,7 +638,7 @@ test("a running task can be stopped, and a chat can be deleted after a confirmat
     await expect(transcriptOf(page).getByText("Starting the investigation.")).toBeVisible();
     const stop = page.getByRole("button", { name: "Stop", exact: true });
     await expect(stop).toBeEnabled();
-    await stop.click();
+    await composerOf(page).press("Escape");
     await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
 

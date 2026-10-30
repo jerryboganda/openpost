@@ -129,6 +129,7 @@ func liveRun(t *testing.T, service *Service, model, prompt string, images ...str
 	}
 	t.Logf("model %s answered in %d input and %d output tokens after tools %v (failed %v): %q",
 		finished.Model, finished.InputTokens, finished.OutputTokens, result.tools, result.failed, result.answer)
+	require.NotContains(t, result.answer, "<think", "reasoning that a model writes into its answer never reaches the reader")
 	return result
 }
 

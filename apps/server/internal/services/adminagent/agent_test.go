@@ -636,7 +636,7 @@ func TestReasoningWrittenIntoAnAnswerNeverReachesTheReader(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "Production is healthy.", view.Messages[len(view.Messages)-1].Content)
 	for _, event := range eventsOf(t, service, run.ID) {
-		require.NotContains(t, event.Message, "<think>", "no event carries the reasoning")
+		require.NotContains(t, event.AgentMessage, "<think>", "no event carries the reasoning")
 	}
 }
 

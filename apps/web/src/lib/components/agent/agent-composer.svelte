@@ -208,7 +208,7 @@
 				placeholder={m.agent_composer_placeholder()}
 				aria-label={m.agent_composer_label()}
 				disabled={blocked}
-				class="field-sizing-content max-h-52 min-h-11 w-full resize-none border-0 bg-transparent px-3.5 py-3 text-base shadow-none outline-none focus-visible:outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:text-sm"
+				class="field-sizing-content max-h-52 min-h-11 w-full resize-none border-0 bg-transparent px-3.5 py-3 text-base shadow-none ring-0 outline-none placeholder:text-muted-foreground focus:ring-0 focus-visible:outline-none disabled:cursor-not-allowed md:text-sm"
 				onkeydown={onKeydown}
 				onpaste={onPaste}
 			/>
@@ -298,9 +298,13 @@
 							onValueChange={chooseEffort}
 						>
 							<Select.Trigger size="sm" class={triggerClass} aria-label={m.agent_effort()}>
-								<span class="truncate"
-									>{m.agent_effort_value({ level: effortLabel(session.preferences.effort) })}</span
-								>
+								<span class="truncate">
+									<ThemeIcon role="idea" class="mr-1 inline size-3.5 align-text-bottom sm:hidden" />
+									<span class="sm:hidden">{effortLabel(session.preferences.effort)}</span>
+									<span class="hidden sm:inline"
+										>{m.agent_effort_value({ level: effortLabel(session.preferences.effort) })}</span
+									>
+								</span>
 							</Select.Trigger>
 							<Select.Content>
 								{#each EFFORTS as effort (effort)}

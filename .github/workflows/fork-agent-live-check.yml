@@ -4,7 +4,9 @@ name: Fork Agent Live Check
 # starts agent runs against the OpenCode Go endpoint, so it needs the
 # OPENCODE_API_KEY secret and runs only when started by hand. Each model must
 # stream, call tools across several steps, and read an image, or hand the image
-# to a model that can. The Go tests skip themselves when the key is missing.
+# to a model that can. It also confirms that reasoning a model writes into its
+# answer never reaches the reader. The Go tests skip themselves when the key is
+# missing.
 on:
   push:
     # A workflow that is not on the default branch yet cannot be dispatched by
