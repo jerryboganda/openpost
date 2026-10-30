@@ -6,6 +6,7 @@
 	import type { AgentAccess, AgentEffort } from '$lib/agent/types';
 	import InlineNotice from '$lib/components/inline-notice.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { m } from '$lib/paraglide/messages';
@@ -215,13 +216,13 @@
 				onpaste={onPaste}
 			/>
 			<div class="flex flex-wrap items-center gap-x-1 gap-y-0.5 p-2">
-				<input
-					bind:this={picker}
+				<Input
+					bind:ref={picker}
 					type="file"
 					accept={IMAGE_ACCEPT}
 					multiple
 					class="sr-only"
-					tabindex="-1"
+					tabindex={-1}
 					aria-hidden="true"
 					onchange={onPick}
 				/>

@@ -605,6 +605,17 @@ test("a pasted screenshot uploads at once and the run streams into the chat", as
     await page.screenshot({ path: info.outputPath("tray-390-light.png") });
     await page.setViewportSize({ width: 1280, height: 900 });
 
+    await page.locator("input[type='file']").setInputFiles({
+      name: "picked.png",
+      mimeType: "image/png",
+      buffer: PICTURE,
+    });
+    await expect(page.getByRole("img", { name: "picked.png" })).toBeVisible();
+    await expect.poll(() => fake.uploads.length).toBe(2);
+    expect(fake.uploads[1].filename).toBe("picked.png");
+    await page.getByRole("button", { name: "Remove picked.png" }).click();
+    await expect(page.getByRole("img", { name: "picked.png" })).toHaveCount(0);
+
     const runId = "run-live";
     const conversationId = "conv-new";
     const user = {
