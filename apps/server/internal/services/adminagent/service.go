@@ -68,7 +68,7 @@ var (
 	ErrInvalidCallback      = errors.New("invalid agent callback")
 )
 
-type Conversation struct {
+type AgentConversation struct {
 	bun.BaseModel   `bun:"table:admin_agent_conversations"`
 	ID              string    `bun:"id,pk" json:"id"`
 	Engine          string    `bun:"engine,notnull" json:"engine"`
@@ -79,7 +79,7 @@ type Conversation struct {
 	UpdatedAt       time.Time `bun:"updated_at,notnull" json:"updated_at"`
 }
 
-type Message struct {
+type AgentMessage struct {
 	bun.BaseModel  `bun:"table:admin_agent_messages"`
 	ID             string    `bun:"id,pk" json:"id"`
 	ConversationID string    `bun:"conversation_id,notnull" json:"conversation_id"`
@@ -89,7 +89,7 @@ type Message struct {
 	CreatedAt      time.Time `bun:"created_at,notnull" json:"created_at"`
 }
 
-type Run struct {
+type AgentRun struct {
 	bun.BaseModel  `bun:"table:admin_agent_runs"`
 	ID             string     `bun:"id,pk" json:"id"`
 	ConversationID string     `bun:"conversation_id,notnull" json:"conversation_id"`
@@ -108,14 +108,14 @@ type Run struct {
 	FinishedAt     *time.Time `bun:"finished_at" json:"finished_at,omitempty"`
 }
 
-type Event struct {
+type AgentEvent struct {
 	bun.BaseModel `bun:"table:admin_agent_events"`
 	ID            string    `bun:"id,pk" json:"id"`
 	RunID         string    `bun:"run_id,notnull" json:"run_id"`
 	Seq           int64     `bun:"seq,notnull" json:"seq"`
 	EventKey      string    `bun:"event_key,notnull" json:"-"`
 	Kind          string    `bun:"kind,notnull" json:"kind"`
-	Message       string    `bun:"message,notnull" json:"message"`
+	AgentMessage       string    `bun:"message,notnull" json:"message"`
 	DataJSON      string    `bun:"data_json,notnull" json:"-"`
 	CreatedAt     time.Time `bun:"created_at,notnull" json:"created_at"`
 }
@@ -127,21 +127,21 @@ type EngineStatus struct {
 	Reason    string `json:"reason,omitempty"`
 }
 
-type ConversationView struct {
-	Conversation
-	Messages []Message `json:"messages"`
-	Runs     []Run     `json:"runs"`
-	Events   []Event   `json:"events"`
+type AgentConversationView struct {
+	AgentConversation
+	Messages []AgentMessage `json:"messages"`
+	Runs     []AgentRun     `json:"runs"`
+	Events   []AgentEvent   `json:"events"`
 }
 
 type CallbackEvent struct {
 	Key     string          `json:"key"`
 	Kind    string          `json:"kind"`
-	Message string          `json:"message"`
+	AgentMessage string          `json:"message"`
 	Data    json.RawMessage `json:"data,omitempty"`
 }
 
-type Callback struct {
+type AgentCallback struct {
 	RunID          string          `json:"run_id"`
 	Status         string          `json:"status"`
 	Summary        string          `json:"summary"`
@@ -167,7 +167,7 @@ type DispatchResult struct {
 
 type Dispatcher interface {
 	Dispatch(ctx context.Context, request DispatchRequest) (DispatchResult, error)
-	Cancel(ctx context.Context, run Run) error
+	Cancel(ctx context.Context, run AgentRun) error
 }
 
 type Service struct {
@@ -240,7 +240,7 @@ func (s *Service) CreateConversation(
 	ctx context.Context,
 	userID, workspaceID, title string,
 	engine Engine,
-) (*Conversation, error) {
+) (*AgentConversation, error) {
 	if !engine.Valid() {
 		return nil, ErrInvalidEngine
 	}
@@ -249,7 +249,7 @@ func (s *Service) CreateConversation(
 		title = string([]rune(title)[:maxConversationTitle])
 	}
 	now := s.now().UTC()
-	conversation := &Conversation{
+	conversation := &AgentConversation{
 		ID:              uuid.NewString(),
 		Engine:          string(engine),
 		Title:           title,
@@ -266,8 +266,8 @@ func (s *Service) CreateConversation(
 	return conversation, nil
 }
 
-func (s *Service) ListConversations(ctx context.Context) ([]Conversation, error) {
-	conversations := make([]Conversation, 0)
+func (s *Service) ListConversations(ctx context.Context) ([]AgentConversation, error) {
+	conversations := make([]AgentConversation, 0)
 	if err := s.db.NewSelect().Model(&conversations).
 		OrderExpr("updated_at DESC").
 		Limit(100).
@@ -277,15 +277,15 @@ func (s *Service) ListConversations(ctx context.Context) ([]Conversation, error)
 	return conversations, nil
 }
 
-func (s *Service) GetConversation(ctx context.Context, id string) (*ConversationView, error) {
-	conversation := new(Conversation)
+func (s *Service) GetConversation(ctx context.Context, id string) (*AgentConversationView, error) {
+	conversation := new(AgentConversation)
 	if err := s.db.NewSelect().Model(conversation).Where("id = ?", id).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrConversationNotFound
 		}
 		return nil, fmt.Errorf("load admin agent conversation: %w", err)
 	}
-	view := &ConversationView{Conversation: *conversation}
+	view := &AgentConversationView{AgentConversation: *conversation}
 	if err := s.db.NewSelect().Model(&view.Messages).
 		Where("conversation_id = ?", id).
 		OrderExpr("created_at ASC").
@@ -302,7 +302,7 @@ func (s *Service) GetConversation(ctx context.Context, id string) (*Conversation
 	for _, run := range view.Runs {
 		runIDs = append(runIDs, run.ID)
 	}
-	view.Events = make([]Event, 0)
+	view.Events = make([]AgentEvent, 0)
 	if len(runIDs) > 0 {
 		if err := s.db.NewSelect().Model(&view.Events).
 			Where("run_id IN (?)", bun.In(runIDs)).
@@ -314,12 +314,12 @@ func (s *Service) GetConversation(ctx context.Context, id string) (*Conversation
 	return view, nil
 }
 
-func (s *Service) StartRun(ctx context.Context, conversationID, prompt string) (*Run, error) {
+func (s *Service) StartRun(ctx context.Context, conversationID, prompt string) (*AgentRun, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" || len([]rune(prompt)) > MaxPromptCharacters {
 		return nil, ErrInvalidPrompt
 	}
-	conversation := new(Conversation)
+	conversation := new(AgentConversation)
 	if err := s.db.NewSelect().Model(conversation).Where("id = ?", conversationID).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrConversationNotFound
@@ -327,7 +327,7 @@ func (s *Service) StartRun(ctx context.Context, conversationID, prompt string) (
 		return nil, fmt.Errorf("load admin agent conversation: %w", err)
 	}
 	now := s.now().UTC()
-	run := &Run{
+	run := &AgentRun{
 		ID:             uuid.NewString(),
 		ConversationID: conversation.ID,
 		Engine:         conversation.Engine,
@@ -335,7 +335,7 @@ func (s *Service) StartRun(ctx context.Context, conversationID, prompt string) (
 		Prompt:         prompt,
 		CreatedAt:      now,
 	}
-	message := &Message{
+	message := &AgentMessage{
 		ID:             uuid.NewString(),
 		ConversationID: conversation.ID,
 		Role:           "user",
@@ -350,7 +350,7 @@ func (s *Service) StartRun(ctx context.Context, conversationID, prompt string) (
 		if _, err := tx.NewInsert().Model(message).Exec(ctx); err != nil {
 			return err
 		}
-		_, err := tx.NewUpdate().Model((*Conversation)(nil)).
+		_, err := tx.NewUpdate().Model((*AgentConversation)(nil)).
 			Set("updated_at = ?", now).
 			Where("id = ?", conversation.ID).
 			Exec(ctx)
@@ -413,7 +413,7 @@ func (s *Service) StartRun(ctx context.Context, conversationID, prompt string) (
 	return run, nil
 }
 
-func (s *Service) finishWithoutDispatch(ctx context.Context, run *Run, code, message string) error {
+func (s *Service) finishWithoutDispatch(ctx context.Context, run *AgentRun, code, message string) error {
 	now := s.now().UTC()
 	run.Status = string(RunFailed)
 	run.FailureCode = code
@@ -429,8 +429,8 @@ func (s *Service) finishWithoutDispatch(ctx context.Context, run *Run, code, mes
 	return nil
 }
 
-func (s *Service) CancelRun(ctx context.Context, runID string) (*Run, error) {
-	run := new(Run)
+func (s *Service) CancelRun(ctx context.Context, runID string) (*AgentRun, error) {
+	run := new(AgentRun)
 	if err := s.db.NewSelect().Model(run).Where("id = ?", runID).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrRunNotFound
@@ -456,7 +456,7 @@ func (s *Service) CancelRun(ctx context.Context, runID string) (*Run, error) {
 	return run, nil
 }
 
-func (s *Service) ApplyCallback(ctx context.Context, callback Callback) (*Run, error) {
+func (s *Service) ApplyCallback(ctx context.Context, callback AgentCallback) (*AgentRun, error) {
 	callback.RunID = strings.TrimSpace(callback.RunID)
 	callback.Status = strings.TrimSpace(callback.Status)
 	if callback.RunID == "" {
@@ -466,7 +466,7 @@ func (s *Service) ApplyCallback(ctx context.Context, callback Callback) (*Run, e
 	if status != RunRunning && status != RunSucceeded && status != RunFailed {
 		return nil, ErrInvalidCallback
 	}
-	run := new(Run)
+	run := new(AgentRun)
 	if err := s.db.NewSelect().Model(run).Where("id = ?", callback.RunID).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrRunNotFound
@@ -521,7 +521,7 @@ func (s *Service) ApplyCallback(ctx context.Context, callback Callback) (*Run, e
 			if key == "" {
 				key = fmt.Sprintf("callback-%d", index)
 			}
-			if err := appendEventTx(ctx, tx, run.ID, key, event.Kind, event.Message, event.Data, now); err != nil {
+			if err := appendEventTx(ctx, tx, run.ID, key, event.Kind, event.AgentMessage, event.Data, now); err != nil {
 				return err
 			}
 		}
@@ -535,11 +535,11 @@ func (s *Service) ApplyCallback(ctx context.Context, callback Callback) (*Run, e
 	return run, nil
 }
 
-func (s *Service) Events(ctx context.Context, runID string, afterSeq int64) ([]Event, error) {
+func (s *Service) Events(ctx context.Context, runID string, afterSeq int64) ([]AgentEvent, error) {
 	if _, err := s.runExists(ctx, runID); err != nil {
 		return nil, err
 	}
-	events := make([]Event, 0)
+	events := make([]AgentEvent, 0)
 	if err := s.db.NewSelect().Model(&events).
 		Where("run_id = ? AND seq > ?", runID, afterSeq).
 		OrderExpr("seq ASC").
@@ -549,8 +549,8 @@ func (s *Service) Events(ctx context.Context, runID string, afterSeq int64) ([]E
 	return events, nil
 }
 
-func (s *Service) GetRun(ctx context.Context, runID string) (*Run, error) {
-	run := new(Run)
+func (s *Service) GetRun(ctx context.Context, runID string) (*AgentRun, error) {
+	run := new(AgentRun)
 	if err := s.db.NewSelect().Model(run).Where("id = ?", runID).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrRunNotFound
@@ -652,7 +652,7 @@ func (s *Service) failAssistantRun(ctx context.Context, runID, code, message str
 	s.appendEvent(ctx, runID, "assistant-failed-"+code, "error", message, nil)
 }
 
-func assistantTranscript(messages []Message) string {
+func assistantTranscript(messages []AgentMessage) string {
 	start := 0
 	if len(messages) > 20 {
 		start = len(messages) - 20
@@ -715,7 +715,7 @@ func classifyAssistantFailure(ctx context.Context, err error) (string, string) {
 // outcome is unknown instead of claiming success or failure.
 func (s *Service) FailInterrupted(ctx context.Context) (int, error) {
 	now := s.now().UTC()
-	runs := make([]Run, 0)
+	runs := make([]AgentRun, 0)
 	if err := s.db.NewSelect().Model(&runs).
 		Where("status IN (?)", bun.In([]string{
 			string(RunQueued), string(RunDispatched), string(RunRunning),
@@ -742,7 +742,7 @@ func (s *Service) FailInterrupted(ctx context.Context) (int, error) {
 }
 
 func (s *Service) runExists(ctx context.Context, runID string) (bool, error) {
-	exists, err := s.db.NewSelect().Model((*Run)(nil)).Where("id = ?", runID).Exists(ctx)
+	exists, err := s.db.NewSelect().Model((*AgentRun)(nil)).Where("id = ?", runID).Exists(ctx)
 	if err != nil {
 		return false, fmt.Errorf("load admin agent run: %w", err)
 	}
@@ -774,7 +774,7 @@ func appendEventTx(
 		kind = "progress"
 	}
 	if key != "" {
-		exists, err := db.NewSelect().Model((*Event)(nil)).
+		exists, err := db.NewSelect().Model((*AgentEvent)(nil)).
 			Where("run_id = ? AND event_key = ?", runID, key).
 			Exists(ctx)
 		if err != nil {
@@ -785,7 +785,7 @@ func appendEventTx(
 		}
 	}
 	var maxSeq int64
-	if err := db.NewSelect().Model((*Event)(nil)).
+	if err := db.NewSelect().Model((*AgentEvent)(nil)).
 		ColumnExpr("COALESCE(MAX(seq), 0)").
 		Where("run_id = ?", runID).
 		Scan(ctx, &maxSeq); err != nil {
@@ -795,13 +795,13 @@ func appendEventTx(
 	if len(data) > 0 {
 		encoded = string(data)
 	}
-	event := &Event{
+	event := &AgentEvent{
 		ID:        uuid.NewString(),
 		RunID:     runID,
 		Seq:       maxSeq + 1,
 		EventKey:  key,
 		Kind:      kind,
-		Message:   strings.TrimSpace(message),
+		AgentMessage:   strings.TrimSpace(message),
 		DataJSON:  encoded,
 		CreatedAt: now,
 	}
@@ -809,8 +809,8 @@ func appendEventTx(
 	return err
 }
 
-func upsertAssistantMessageTx(ctx context.Context, db execer, run *Run, now time.Time) error {
-	existing := new(Message)
+func upsertAssistantMessageTx(ctx context.Context, db execer, run *AgentRun, now time.Time) error {
+	existing := new(AgentMessage)
 	err := db.NewSelect().Model(existing).
 		Where("run_id = ? AND role = ?", run.ID, "assistant").
 		Scan(ctx)
@@ -824,7 +824,7 @@ func upsertAssistantMessageTx(ctx context.Context, db execer, run *Run, now time
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	_, err = db.NewInsert().Model(&Message{
+	_, err = db.NewInsert().Model(&AgentMessage{
 		ID:             uuid.NewString(),
 		ConversationID: run.ConversationID,
 		Role:           "assistant",

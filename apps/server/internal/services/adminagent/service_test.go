@@ -30,7 +30,7 @@ func (f *fakeDispatcher) Dispatch(_ context.Context, request DispatchRequest) (D
 	return DispatchResult{Ref: "main", URL: "https://github.com/example/actions"}, nil
 }
 
-func (f *fakeDispatcher) Cancel(_ context.Context, run Run) error {
+func (f *fakeDispatcher) Cancel(_ context.Context, run AgentRun) error {
 	f.cancelled = append(f.cancelled, run.ID)
 	return f.cancelErr
 }
@@ -73,20 +73,20 @@ func TestConversationRunAndCallbackLifecycle(t *testing.T) {
 	require.Len(t, dispatcher.dispatched, 1)
 	require.Equal(t, EngineOpenCode, dispatcher.dispatched[0].Engine)
 
-	_, err = service.ApplyCallback(ctx, Callback{
+	_, err = service.ApplyCallback(ctx, AgentCallback{
 		RunID:  run.ID,
 		Status: string(RunRunning),
-		Events: []CallbackEvent{{Key: "phase-setup", Kind: "progress", Message: "Installing the engine"}},
+		Events: []CallbackEvent{{Key: "phase-setup", Kind: "progress", AgentMessage: "Installing the engine"}},
 	})
 	require.NoError(t, err)
 
-	_, err = service.ApplyCallback(ctx, Callback{
+	_, err = service.ApplyCallback(ctx, AgentCallback{
 		RunID:        run.ID,
 		Status:       string(RunSucceeded),
 		Summary:      "Verified readiness and reported the revision.",
 		Branch:       "agent/check",
 		BaseRevision: "0123456789abcdef0123456789abcdef01234567",
-		Events:       []CallbackEvent{{Key: "phase-setup", Kind: "progress", Message: "duplicate must be ignored"}},
+		Events:       []CallbackEvent{{Key: "phase-setup", Kind: "progress", AgentMessage: "duplicate must be ignored"}},
 	})
 	require.NoError(t, err)
 
@@ -106,7 +106,7 @@ func TestConversationRunAndCallbackLifecycle(t *testing.T) {
 	for _, event := range view.Events {
 		if event.EventKey == "phase-setup" {
 			setupEvents++
-			require.Equal(t, "Installing the engine", event.Message)
+			require.Equal(t, "Installing the engine", event.AgentMessage)
 		}
 	}
 	require.Equal(t, 1, setupEvents, "duplicate callback keys must be idempotent")
@@ -135,7 +135,7 @@ func TestDispatchFailureDoesNotClaimSuccess(t *testing.T) {
 	service := NewService(adminAgentTestDB(t), dispatcher)
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineClaude)
 	require.NoError(t, err)
-	run, err := service.StartRun(ctx, conversation.ID, "Run the tests.")
+	run, err := service.StartRun(ctx, conversation.ID, "AgentRun the tests.")
 	require.NoError(t, err)
 	require.Equal(t, string(RunFailed), run.Status)
 	require.Equal(t, "dispatch_failed", run.FailureCode)
@@ -156,7 +156,7 @@ func TestCancelStopsFurtherStatusChanges(t *testing.T) {
 	require.Equal(t, string(RunCanceled), cancelled.Status)
 	require.Equal(t, []string{run.ID}, dispatcher.cancelled)
 
-	afterCancel, err := service.ApplyCallback(ctx, Callback{
+	afterCancel, err := service.ApplyCallback(ctx, AgentCallback{
 		RunID:   run.ID,
 		Status:  string(RunSucceeded),
 		Summary: "Late success must not override the administrator.",
@@ -187,7 +187,7 @@ func TestInterruptedRunsAreRecoverableAndCorrectable(t *testing.T) {
 	require.Equal(t, "interrupted", stored.FailureCode)
 	require.Contains(t, stored.FailureMessage, "outcome is unknown")
 
-	corrected, err := service.ApplyCallback(ctx, Callback{
+	corrected, err := service.ApplyCallback(ctx, AgentCallback{
 		RunID:   run.ID,
 		Status:  string(RunSucceeded),
 		Summary: "The engine had already finished after the restart.",
@@ -231,7 +231,7 @@ func (f *fakeAssistantGenerator) Generate(_ context.Context, _ ai.GenerateReques
 	return ai.GenerateResult{Text: f.text, Model: "opencode-test"}, nil
 }
 
-func waitForTerminalRun(t *testing.T, service *Service, runID string) *Run {
+func waitForTerminalRun(t *testing.T, service *Service, runID string) *AgentRun {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

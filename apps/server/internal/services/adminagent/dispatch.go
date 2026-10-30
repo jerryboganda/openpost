@@ -94,7 +94,7 @@ func (d *GitHubDispatcher) Dispatch(ctx context.Context, request DispatchRequest
 	}, nil
 }
 
-func (d *GitHubDispatcher) Cancel(ctx context.Context, run Run) error {
+func (d *GitHubDispatcher) Cancel(ctx context.Context, run AgentRun) error {
 	url := fmt.Sprintf(
 		"%s/repos/%s/actions/workflows/%s/runs?event=workflow_dispatch&per_page=100",
 		githubAPIBase, d.config.Repository, d.config.Workflow,

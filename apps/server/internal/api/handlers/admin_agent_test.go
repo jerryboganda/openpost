@@ -28,7 +28,7 @@ func (d *agentTestDispatcher) Dispatch(_ context.Context, request adminagent.Dis
 	return adminagent.DispatchResult{Ref: "main", URL: "https://github.com/example/actions"}, nil
 }
 
-func (d *agentTestDispatcher) Cancel(_ context.Context, run adminagent.Run) error {
+func (d *agentTestDispatcher) Cancel(_ context.Context, run adminagent.AgentRun) error {
 	d.cancelled = append(d.cancelled, run.ID)
 	return nil
 }
@@ -72,13 +72,13 @@ func requestAgent(t *testing.T, e *echo.Echo, method, path string, body any) *ht
 }
 
 func TestAdminAgentAuthorizationAndConversationFlow(t *testing.T) {
-	t.Run("ordinary user cannot list conversations", func(t *testing.T) {
+	t.AgentRun("ordinary user cannot list conversations", func(t *testing.T) {
 		e, _, _ := newAdminAgentTestServer(t, false, &agentTestDispatcher{})
 		response := requestAgent(t, e, http.MethodGet, "/api/v1/admin/agent/conversations", nil)
 		require.Equal(t, http.StatusForbidden, response.Code)
 	})
 
-	t.Run("api token cannot use the administrator agent", func(t *testing.T) {
+	t.AgentRun("api token cannot use the administrator agent", func(t *testing.T) {
 		e, _, _ := newAdminAgentTestServer(t, true, &agentTestDispatcher{})
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/agent/conversations", nil)
 		request.Header.Set("Authorization", "Bearer bad-token")
@@ -87,7 +87,7 @@ func TestAdminAgentAuthorizationAndConversationFlow(t *testing.T) {
 		require.NotEqual(t, http.StatusOK, recorder.Code)
 	})
 
-	t.Run("admin creates a conversation and starts a run", func(t *testing.T) {
+	t.AgentRun("admin creates a conversation and starts a run", func(t *testing.T) {
 		dispatcher := &agentTestDispatcher{}
 		e, service, _ := newAdminAgentTestServer(t, true, dispatcher)
 
@@ -97,31 +97,31 @@ func TestAdminAgentAuthorizationAndConversationFlow(t *testing.T) {
 		})
 		require.Equal(t, http.StatusOK, created.Code, created.Body.String())
 		var createdBody struct {
-			Conversation struct {
+			AgentConversation struct {
 				ID string `json:"id"`
 			} `json:"conversation"`
 		}
 		require.NoError(t, json.NewDecoder(created.Body).Decode(&createdBody))
-		require.NotEmpty(t, createdBody.Conversation.ID)
+		require.NotEmpty(t, createdBody.AgentConversation.ID)
 		require.Len(t, dispatcher.dispatched, 0)
 
 		started := requestAgent(t, e, http.MethodPost,
-			"/api/v1/admin/agent/conversations/"+createdBody.Conversation.ID+"/messages",
+			"/api/v1/admin/agent/conversations/"+createdBody.AgentConversation.ID+"/messages",
 			map[string]string{"prompt": "Inspect readiness."})
 		require.Equal(t, http.StatusOK, started.Code, started.Body.String())
 		var startedBody struct {
-			Run adminagent.Run `json:"run"`
+			AgentRun adminagent.AgentRun `json:"run"`
 		}
 		require.NoError(t, json.NewDecoder(started.Body).Decode(&startedBody))
-		require.Equal(t, "dispatched", startedBody.Run.Status)
+		require.Equal(t, "dispatched", startedBody.AgentRun.Status)
 
-		view, err := service.GetConversation(t.Context(), createdBody.Conversation.ID)
+		view, err := service.GetConversation(t.Context(), createdBody.AgentConversation.ID)
 		require.NoError(t, err)
 		require.Len(t, view.Messages, 1)
 		require.Equal(t, "user", view.Messages[0].Role)
 	})
 
-	t.Run("unknown engine is rejected", func(t *testing.T) {
+	t.AgentRun("unknown engine is rejected", func(t *testing.T) {
 		e, _, _ := newAdminAgentTestServer(t, true, &agentTestDispatcher{})
 		response := requestAgent(t, e, http.MethodPost, "/api/v1/admin/agent/conversations", map[string]string{
 			"engine": "shell",

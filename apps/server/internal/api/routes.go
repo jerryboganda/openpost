@@ -162,6 +162,13 @@ type RouteDeps struct {
 	ProfileHandler  *handlers.ProfileHandler
 }
 
+func registerAdminAgentRoutes(api huma.API, deps RouteDeps) {
+	if deps.AdminAgentHandler == nil {
+		return
+	}
+	deps.AdminAgentHandler.RegisterRoutes(api)
+}
+
 func RegisterHumaRoutes(api huma.API, deps RouteDeps) {
 	providerRegistrars := append([]func(string, platform.Adapter){}, deps.ProviderRegistrars...)
 	profileHandler := deps.ProfileHandler
@@ -371,9 +378,7 @@ func RegisterHumaRoutes(api huma.API, deps RouteDeps) {
 	handlers.NewInstanceSettingsHandler(deps.InstanceSettingsService, deps.DB, deps.Authenticator).RegisterRoutes(api)
 	handlers.NewAIPromptHandler(deps.AIPromptService, deps.DB, deps.Authenticator).RegisterRoutes(api)
 	handlers.NewAIDiagnosticHandler(deps.DB, deps.Authenticator, deps.EditorAgentGenerator, deps.AIDiagnosticProvider, deps.AIDiagnosticModel).RegisterRoutes(api)
-	if deps.AdminAgentHandler != nil {
-		deps.AdminAgentHandler.RegisterRoutes(api)
-	}
+	registerAdminAgentRoutes(api, deps)
 	handlers.NewUpdateStatusHandler(deps.DB, deps.Authenticator, deps.UpdateStatusService, deps.InstanceSettingsService).RegisterRoutes(api)
 	handlers.NewGitHubStarsHandler(deps.GitHubStarsService).RegisterRoutes(api)
 

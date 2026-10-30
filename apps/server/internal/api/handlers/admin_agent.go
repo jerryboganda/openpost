@@ -37,9 +37,9 @@ type AdminAgentConversationResponse struct {
 	WorkspaceID string               `json:"workspace_id,omitempty"`
 	CreatedAt   time.Time            `json:"created_at"`
 	UpdatedAt   time.Time            `json:"updated_at"`
-	Messages    []adminagent.Message `json:"messages"`
-	Runs        []adminagent.Run     `json:"runs"`
-	Events      []adminagent.Event   `json:"events"`
+	Messages    []adminagent.AgentMessage `json:"messages"`
+	Runs        []adminagent.AgentRun     `json:"runs"`
+	Events      []adminagent.AgentEvent   `json:"events"`
 }
 
 type adminAgentEnginesOutput struct {
@@ -50,19 +50,19 @@ type adminAgentEnginesOutput struct {
 
 type adminAgentConversationsOutput struct {
 	Body struct {
-		Conversations []adminagent.Conversation `json:"conversations"`
+		Conversations []adminagent.AgentConversation `json:"conversations"`
 	}
 }
 
 type adminAgentConversationOutput struct {
 	Body struct {
-		Conversation AdminAgentConversationResponse `json:"conversation"`
+		AgentConversation AdminAgentConversationResponse `json:"conversation"`
 	}
 }
 
 type adminAgentRunOutput struct {
 	Body struct {
-		Run adminagent.Run `json:"run"`
+		AgentRun adminagent.AgentRun `json:"run"`
 	}
 }
 
@@ -159,7 +159,7 @@ func (h *AdminAgentHandler) listConversations(ctx context.Context, _ *struct{}) 
 		return nil, huma.Error500InternalServerError("failed to list agent conversations")
 	}
 	return &adminAgentConversationsOutput{Body: struct {
-		Conversations []adminagent.Conversation `json:"conversations"`
+		Conversations []adminagent.AgentConversation `json:"conversations"`
 	}{Conversations: conversations}}, nil
 }
 
@@ -196,7 +196,7 @@ func (h *AdminAgentHandler) createConversation(
 		return nil, huma.Error500InternalServerError("failed to load agent conversation")
 	}
 	out := &adminAgentConversationOutput{}
-	out.Body.Conversation = adminAgentConversation(*view)
+	out.Body.AgentConversation = adminAgentConversation(*view)
 	return out, nil
 }
 
@@ -215,7 +215,7 @@ func (h *AdminAgentHandler) getConversation(
 		return nil, huma.Error500InternalServerError("failed to load agent conversation")
 	}
 	out := &adminAgentConversationOutput{}
-	out.Body.Conversation = adminAgentConversation(*view)
+	out.Body.AgentConversation = adminAgentConversation(*view)
 	return out, nil
 }
 
@@ -238,7 +238,7 @@ func (h *AdminAgentHandler) startRun(
 		}
 	}
 	out := &adminAgentRunOutput{}
-	out.Body.Run = *run
+	out.Body.AgentRun = *run
 	return out, nil
 }
 
@@ -261,7 +261,7 @@ func (h *AdminAgentHandler) cancelRun(
 		}
 	}
 	out := &adminAgentRunOutput{}
-	out.Body.Run = *run
+	out.Body.AgentRun = *run
 	return out, nil
 }
 
@@ -311,7 +311,7 @@ func (h *AdminAgentHandler) streamEvents(c echo.Context) error {
 func (h *AdminAgentHandler) forwardRunEvents(
 	ctx context.Context,
 	runID string,
-	run *adminagent.Run,
+	run *adminagent.AgentRun,
 	after int64,
 	send func(string, any) bool,
 ) {
@@ -387,7 +387,7 @@ func (h *AdminAgentHandler) callback(c echo.Context) error {
 	if err := adminagent.VerifyCallback(h.callbackSecret, timestamp, signature, body, time.Now()); err != nil {
 		return c.JSON(http.StatusUnauthorized, map[string]string{fieldError: "invalid callback signature"})
 	}
-	var callback adminagent.Callback
+	var callback adminagent.AgentCallback
 	if err := json.Unmarshal(body, &callback); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{fieldError: "invalid callback payload"})
 	}
@@ -414,7 +414,7 @@ func (h *AdminAgentHandler) authorizeEcho(c echo.Context) error {
 	return nil
 }
 
-func adminAgentConversation(view adminagent.ConversationView) AdminAgentConversationResponse {
+func adminAgentConversation(view adminagent.AgentConversationView) AdminAgentConversationResponse {
 	workspaceID := ""
 	if view.WorkspaceID != nil {
 		workspaceID = *view.WorkspaceID

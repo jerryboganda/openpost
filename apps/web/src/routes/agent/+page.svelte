@@ -112,10 +112,11 @@
 			error = m.agent_load_failed();
 			return;
 		}
-		active = response.data.conversation;
+		const view = response.data.conversation;
+		active = view;
 		error = '';
-		lastEventSeq = active.events.reduce((max, event) => Math.max(max, event.seq), 0);
-		const running = active.runs.find((run) => runActive(run.status));
+		lastEventSeq = view.events.reduce((max, event) => Math.max(max, event.seq), 0);
+		const running = view.runs.find((run) => runActive(run.status));
 		if (running) startStream(running.id, lastEventSeq);
 	}
 
@@ -334,7 +335,11 @@
 				{/if}
 
 				{#if !active}
-					<EmptyState title={m.agent_title()} description={m.agent_empty()} />
+					<EmptyState
+						themeIconRole="settings"
+						title={m.agent_title()}
+						description={m.agent_empty()}
+					/>
 				{:else}
 					<div class="space-y-3">
 						{#each active.messages as message (message.id)}
