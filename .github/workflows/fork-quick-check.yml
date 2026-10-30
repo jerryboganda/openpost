@@ -177,13 +177,30 @@ jobs:
       # own, so a formatting problem does not hide a policy problem.
       - name: Format
         run: bun run format:check
+      # The aggregate `check -- policy` stops at its first failing stage and
+      # reports the rest as interrupted. Running each stage on its own lists
+      # every failure from one run instead of one per push.
       - name: Policy
         if: ${{ !cancelled() }}
         env:
           OPENPOST_SECRET_SCAN_HEAD: ${{ github.event.inputs.ref || github.sha }}
         run: |
-          base="$(git merge-base origin/main HEAD)"
-          OPENPOST_SECRET_SCAN_BASE="$base" bun run check -- policy
+          OPENPOST_SECRET_SCAN_BASE="$(git merge-base origin/main HEAD)"
+          export OPENPOST_SECRET_SCAN_BASE
+          failed=()
+          bun run --filter @openpost/web generate:i18n || failed+=(translations)
+          for stage in contracts build-graph assets workflows mcp-registry docs release-version \
+            secret-scan app-routes legal-policy provider-certification provider-facts \
+            plan-catalog changelog social-images reachability compatibility ui-consistency \
+            query-migration tasks; do
+            echo "::group::policy stage ${stage}"
+            bun run check -- "$stage" || failed+=("$stage")
+            echo "::endgroup::"
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "::error::Policy stages failed: ${failed[*]}"
+            exit 1
+          fi
       - name: Script tests
         if: ${{ !cancelled() }}
         run: bun test ./scripts
