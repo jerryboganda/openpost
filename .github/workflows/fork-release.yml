@@ -20,6 +20,10 @@ on:
         description: Full git sha for deploy-only mode
         required: false
         type: string
+      proof_run_id:
+        description: Successful Fork Release build run ID for deploy-only mode
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -104,15 +108,17 @@ jobs:
   deploy:
     name: Deploy the tested digest
     needs: build
-    # Fail closed until exact running VPS image/source and GitHub baseline proof
-    # is established independently. A repository variable is not that proof.
-    # Re-enable only as part of a reviewed, verified deployment change.
+    permissions:
+      contents: read
+      actions: read
+    # Deploy only through a manual main-branch request after both operator gates.
     if: |
-      false && always() && github.ref == 'refs/heads/main' &&
-      inputs.mode != 'build-only' &&
+      always() && !cancelled() && github.ref == 'refs/heads/main' &&
+      (inputs.mode == 'build-and-deploy' || inputs.mode == 'deploy-only') &&
       vars.OPENPOST_DEPLOY_ENABLED == 'true' &&
       vars.OPENPOST_VPS_BASELINE_VERIFIED == 'true' &&
-      (needs.build.result == 'success' || inputs.mode == 'deploy-only')
+      ((inputs.mode == 'build-and-deploy' && needs.build.result == 'success') ||
+       (inputs.mode == 'deploy-only' && needs.build.result == 'skipped'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -134,14 +140,36 @@ jobs:
             image="${BUILD_IMAGE}@${BUILD_DIGEST}"
             revision="${GITHUB_SHA}"
           fi
-          [[ "$image" == *"@sha256:"* ]] || { echo "image must be digest-pinned"; exit 1; }
-          [[ "$image" == "${IMAGE}@sha256:"* ]] || { echo "image must come from ${IMAGE}"; exit 1; }
+          [[ "$image" == "${IMAGE}@"* ]] || { echo "image must come from ${IMAGE}"; exit 1; }
+          [[ "${image##*@}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "image must have a full immutable digest"; exit 1; }
           [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo "revision must be a full git sha"; exit 1; }
           {
             echo "image=$image"
             echo "revision=$revision"
             echo "version=sha-${revision}"
           } >> "$GITHUB_OUTPUT"
+      - name: Verify the deploy-only image's successful build proof
+        if: inputs.mode == 'deploy-only'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROOF_RUN_ID: ${{ inputs.proof_run_id }}
+          TARGET_IMAGE: ${{ steps.target.outputs.image }}
+          TARGET_REVISION: ${{ steps.target.outputs.revision }}
+        run: |
+          [[ "$PROOF_RUN_ID" =~ ^[1-9][0-9]*$ ]] || { echo "a successful build run ID is required"; exit 1; }
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PROOF_RUN_ID}")"
+          jq -e --arg revision "$TARGET_REVISION" '
+            .path == ".github/workflows/fork-release.yml" and
+            .head_branch == "main" and
+            .head_sha == $revision and
+            .conclusion == "success"
+          ' <<< "$run_json" >/dev/null || { echo "build run does not prove this revision"; exit 1; }
+          proof_dir="$RUNNER_TEMP/fork-image-proof"
+          gh run download "$PROOF_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "fork-image-proof-${TARGET_REVISION}" --dir "$proof_dir"
+          expected="$(printf 'image=%s\nrevision=%s\n' "$TARGET_IMAGE" "$TARGET_REVISION")"
+          [[ "$(cat "$proof_dir/image-proof.txt")" == "$expected" ]] || { echo "image proof does not match the requested digest/revision"; exit 1; }
+          [[ "$(cat "$proof_dir/image-digest.txt")" == "${TARGET_IMAGE##*@}" ]] || { echo "digest proof mismatch"; exit 1; }
       - name: Configure SSH
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
