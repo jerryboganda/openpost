@@ -1,0 +1,79 @@
+name: VPS Baseline Audit (read only)
+
+# Deliberately manual and independent of the fork release/deployment workflow.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Collect VPS baseline without changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Configure strict SSH host verification
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          for name in VPS_HOST VPS_USER VPS_SSH_KEY VPS_KNOWN_HOSTS; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing configured $name secret"
+              exit 1
+            fi
+          done
+          [[ "$VPS_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo '::error::Invalid VPS_USER format'; exit 1; }
+          [[ "$VPS_HOST" =~ ^[a-zA-Z0-9.:-]+$ ]] || { echo '::error::Invalid VPS_HOST format'; exit 1; }
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/openpost_audit
+          chmod 600 ~/.ssh/openpost_audit
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Collect bounded, redacted baseline evidence
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/openpost-vps-baseline.txt"
+          printf 'audit.workflow_revision=%s\n' "$GITHUB_SHA" > "$report"
+          ssh_options=(-i "$HOME/.ssh/openpost_audit" -o BatchMode=yes -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o GlobalKnownHostsFile=/dev/null -o LogLevel=QUIET -o ConnectTimeout=15)
+          destination="${VPS_USER}@${VPS_HOST}"
+          if ! login="$(ssh "${ssh_options[@]}" "$destination" 'id -un' 2>/dev/null)"; then
+            echo '::error::SSH login or configured host key verification failed'
+            exit 1
+          fi
+          if [[ "$login" != "$VPS_USER" ]]; then
+            echo '::error::Remote login identity differs from configured VPS_USER'
+            exit 1
+          fi
+          fingerprint="$(printf '%s' "$destination" | sha256sum | cut -c 1-20)"
+          printf 'target.configured_identity_fingerprint=%s\n' "$fingerprint" >> "$report"
+          printf 'target.ssh_host_key=verified_against_configured_known_hosts\n' >> "$report"
+          printf 'target.ssh_login=verified_against_configured_user\n' >> "$report"
+          if ! tr -d '\r' < deploy/vps/baseline-audit.sh |
+            ssh "${ssh_options[@]}" "$destination" 'bash -s' >> "$report" 2>/dev/null; then
+            echo '::error::Remote read-only collector failed; evidence may be incomplete'
+            exit 1
+          fi
+          echo 'Read-only evidence collected; inspect the redacted Actions artifact.'
+      - name: Save redacted baseline evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vps-baseline-${{ github.run_id }}
+          path: ${{ runner.temp }}/openpost-vps-baseline.txt
+          retention-days: 7
+          if-no-files-found: warn
