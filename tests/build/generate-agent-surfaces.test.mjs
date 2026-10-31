@@ -70,7 +70,7 @@ async function fixtureDirectory() {
 }
 
 function headerRuleHas(contents, pathname, header) {
-  const lines = contents.split("\n");
+  const lines = contents.replace(/\r\n/gu, "\n").split("\n");
   for (let ruleIndex = 0; ruleIndex < lines.length; ruleIndex += 1) {
     const [prefix, suffix, ...rest] = lines[ruleIndex].split("*");
     if (rest.length > 0) continue;
@@ -107,12 +107,16 @@ test("origin Vary headers cover only canonical HTML and explicit Markdown within
   assert.ok(headerRuleHas(rendered, "/index.md", "Content-Type: text/markdown; charset=utf-8"));
   assert.ok(headerRuleHas(rendered, "/index.md", "Vary: Accept"));
   assert.ok(headerRuleHas(rendered, "/index.md", "X-Robots-Tag: noindex"));
+  assert.ok(
+    headerRuleHas(base.replaceAll("\n", "\r\n"), "/index.md", "Content-Type: text/markdown; charset=utf-8"),
+  );
   assert.match(rendered, /(?:^|\n)\/\n  Link: [^\n]+\n  Vary: Accept\n/u);
   assert.match(rendered, /<\/\.well-known\/api-catalog>; rel="api-catalog"/u);
   assert.equal((rendered.match(/^\/$/gmu) ?? []).length, 1);
   assert.match(rendered, /\n\/features\n  Vary: Accept\n/u);
   assert.doesNotMatch(rendered, /\/assets|\/unknown/u);
   assert.equal(renderOriginVaryHeaders(rendered, pages), rendered);
+  assert.equal(renderOriginVaryHeaders(base.replaceAll("\n", "\r\n"), pages), rendered);
 
   assert.throws(
     () =>
@@ -206,9 +210,16 @@ function deterministicAttributes(node) {
 function deterministicSemanticHTML(node) {
   if (node.nodeName === "#comment") {
     const comment = node.data.trim();
+    const siblings = node.parentNode?.childNodes ?? [];
+    const nextSibling = siblings[siblings.indexOf(node) + 1];
     const isFrameworkMarker =
       /^(?:|\$s\d+|\[-?\d*|\]|\|)$/u.test(comment) ||
-      (/^[a-z0-9]{7}$/iu.test(comment) && /\d/u.test(comment));
+      (/^[a-z0-9]{5,7}$/iu.test(comment) &&
+        (/\d/u.test(comment) ||
+          (comment.length < 7 &&
+            (nextSibling?.tagName === "svg" ||
+              (nextSibling?.tagName === "script" &&
+                documentAttribute(nextSibling, "type") === "application/ld+json")))));
     if (isFrameworkMarker) return undefined;
   }
   if (node.nodeName === "#comment") return { comment: node.data };
@@ -249,7 +260,11 @@ function deterministicSemanticHTML(node) {
     attributes: deterministicAttributes(node),
     children: (node.childNodes ?? [])
       .map(deterministicSemanticHTML)
-      .filter((child) => child !== undefined),
+      .filter(
+        (child) =>
+          child !== undefined &&
+          !(node.tagName === "head" && typeof child.text === "string" && /^\s*$/u.test(child.text)),
+      ),
     templateContent: node.content ? deterministicSemanticHTML(node.content) : undefined,
   };
 }
@@ -271,7 +286,7 @@ test("semantic HTML determinism retains maintained documents and ignores only fr
     <link rel="stylesheet" href="/maintained.css">
     <style>.notice { color: red; }</style>
     <script type="application/ld+json">{"name":"OpenPost"}</script>
-  </head><body data-v-owner="maintained"><!-- maintained note --><!--license--><!--[owner note]--><template><p>Maintained fallback</p></template><span style="color: red">Maintained style</span></body></html>`;
+  </head><body data-v-owner="maintained"><!-- maintained note --><!--license--><!--notes--><!--[owner note]--><template><p>Maintained fallback</p></template><span style="color: red">Maintained style</span></body></html>`;
   for (const [kind, changed] of [
     ["linked stylesheet", maintained.replace("/maintained.css", "/changed.css")],
     ["inline style", maintained.replace("color: red", "color: blue")],
@@ -279,6 +294,7 @@ test("semantic HTML determinism retains maintained documents and ignores only fr
     ["JSON-LD", maintained.replace('"OpenPost"', '"Changed"')],
     ["maintained comment", maintained.replace("maintained note", "changed note")],
     ["seven-character comment", maintained.replace("license", "credits")],
+    ["short maintained comment", maintained.replace("<!--notes-->", "<!--tasks-->")],
     ["bracketed comment", maintained.replace("owner note", "reviewed note")],
     ["maintained data attribute", maintained.replace("data-v-owner", "data-v-reviewer")],
     ["template fallback", maintained.replace("Maintained fallback", "Changed fallback")],
@@ -313,6 +329,17 @@ test("semantic HTML determinism retains maintained documents and ignores only fr
     <script src="/assets/app.B.js"></script>
     <script>window.__VP_HASH_MAP__={"index.md":"B"}</script>`;
   assert.deepEqual(normalize(frameworkBuildB), normalize(frameworkBuildA));
+
+  const svelteBuildA = `<!doctype html><html><head>
+    <link rel="modulepreload" href="./_app/immutable/chunks/A.js">
+    <link rel="modulepreload" href="./_app/immutable/chunks/B.js">
+    <!--omieb--><script type="application/ld+json">{"name":"OpenPost"}</script>
+    </head><body><!--[0--><!--rhdpf6--><p>OpenPost</p><!--jpwpfm--><svg><path d="M0 0"/></svg><!--]--></body></html>`;
+  const svelteBuildB = `<!doctype html><html><head>
+    <link rel="modulepreload" href="./_app/immutable/chunks/C.js">
+    <!--fr5sx6--><script type="application/ld+json">{"name":"OpenPost"}</script>
+    </head><body><!--[0--><p>OpenPost</p><svg><path d="M0 0"/></svg><!--]--></body></html>`;
+  assert.deepEqual(normalize(svelteBuildB), normalize(svelteBuildA));
 });
 
 function documentDescendants(node) {

@@ -226,12 +226,13 @@ requireIncludes(
   "application browser prebuilt-artifact switch",
 );
 
-const dryRun = spawnSync("bunx", ["turbo", "run", "build", "--dry=json"], {
+const dryRun = spawnSync(process.execPath, ["x", "turbo", "run", "build", "--dry=json"], {
   cwd: root,
   encoding: "utf8",
   maxBuffer: 20 * 1024 * 1024,
 });
 if (dryRun.status !== 0) {
+  if (dryRun.error) throw dryRun.error;
   if (dryRun.stderr) process.stderr.write(dryRun.stderr);
   throw new Error("Turbo could not resolve the root build graph");
 }

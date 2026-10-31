@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onDestroy, onMount, tick } from 'svelte';
+	import { client } from '$lib/api/client';
 	import { AttachmentTray } from '$lib/agent/attachments.svelte';
 	import { formatDuration } from '$lib/agent/format';
 	import { AgentSession } from '$lib/agent/session.svelte';
@@ -14,9 +15,11 @@
 	import InlineNotice from '$lib/components/inline-notice.svelte';
 	import PageContainer from '$lib/components/page-container.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import * as Select from '$lib/components/ui/select';
 	import { getLocaleTag } from '$lib/i18n';
 	import { m } from '$lib/paraglide/messages';
 	import { auth } from '$lib/stores/auth';
+	import { workspaceCtx } from '$lib/stores/workspace.svelte';
 	import { ThemeIcon } from '$lib/themes/icons';
 	import { cn } from '$lib/utils';
 
@@ -31,12 +34,20 @@
 	let dragging = $state(false);
 	let deleteOpen = $state(false);
 	let deleting = $state<AgentConversationSummary | null>(null);
+	let newWorkspaceID = $state('');
+	let creatingConversation = $state(false);
 	let started = false;
 
 	const isAdmin = $derived(Boolean($auth.user?.is_admin));
 	const title = $derived(session.active?.title.trim() || m.agent_new_chat());
 	const elapsed = $derived(
 		session.activeRun ? formatDuration(runDurationMs(session.activeRun, session.now)) : ''
+	);
+	const availableWorkspaces = $derived(workspaceCtx.workspaces);
+	const workspaceID = $derived(session.active?.workspace_id ?? newWorkspaceID);
+	const chosenWorkspace = $derived(availableWorkspaces.find((workspace) => workspace.id === workspaceID));
+	const selectedEngine = $derived(
+		session.engines.find((candidate) => candidate.id === (session.active?.engine ?? session.engine))
 	);
 	const unavailableReason = $derived.by(() => {
 		const id = session.active?.engine ?? session.engine;
@@ -52,8 +63,14 @@
 			session.loading = false;
 		}
 	});
+	$effect(() => {
+		if (!newWorkspaceID && workspaceCtx.currentWorkspace?.id) {
+			newWorkspaceID = workspaceCtx.currentWorkspace.id;
+		}
+	});
 
 	onMount(() => {
+		void workspaceCtx.initialize();
 		const refocus = () => {
 			if (
 				document.visibilityState === 'visible' &&
@@ -78,19 +95,37 @@
 	}
 
 	async function submit() {
+		if (creatingConversation) return;
 		const text = draft;
 		const images = tray.ready.flatMap((item) => (item.attachment ? [item.attachment] : []));
-		draft = '';
-		const sent = await session.send(text, images);
-		if (sent) {
-			tray.clear();
-		} else if (draft === '') {
-			draft = text;
+		creatingConversation = true;
+		try {
+			if (!session.active && newWorkspaceID) {
+				const created = await client.POST('/admin/agent/conversations', {
+					body: { engine: session.engine, workspace_id: newWorkspaceID }
+				});
+				if (created.error || !created.data) {
+					session.error = m.agent_load_failed();
+					return;
+				}
+				await session.refreshConversations();
+				if (!(await session.open(created.data.conversation.id))) return;
+			}
+			draft = '';
+			const sent = await session.send(text, images);
+			if (sent) {
+				tray.clear();
+			} else if (draft === '') {
+				draft = text;
+			}
+		} finally {
+			creatingConversation = false;
 		}
 	}
 
 	function newChat() {
 		session.startNew();
+		newWorkspaceID = workspaceCtx.currentWorkspace?.id ?? newWorkspaceID;
 		tray.clear();
 		draft = '';
 		listOpen = false;
@@ -210,6 +245,22 @@
 							<ThemeIcon role="menu" />
 						</Button>
 						<h2 class="min-w-0 flex-1 truncate text-sm font-medium">{title}</h2>
+						{#if !session.active && availableWorkspaces.length > 0}
+							<Select.Root type="single" value={newWorkspaceID} onValueChange={(value) => (newWorkspaceID = value)}>
+								<Select.Trigger class="h-9 w-36 max-w-[35vw]" aria-label={m.workspace_setup_workspace()}>
+									{chosenWorkspace?.name ?? m.workspace_setup_workspace()}
+								</Select.Trigger>
+								<Select.Content>
+									{#each availableWorkspaces as workspace (workspace.id)}
+										<Select.Item value={workspace.id}>{workspace.name}</Select.Item>
+									{/each}
+								</Select.Content>
+							</Select.Root>
+						{:else if chosenWorkspace}
+							<span class="hidden max-w-32 truncate text-xs text-muted-foreground sm:inline" title={m.workspace_setup_workspace()}>
+								{chosenWorkspace.name}
+							</span>
+						{/if}
 						{#if session.connection === 'reconnecting'}
 							<span class="shrink-0 text-xs text-muted-foreground" role="status">
 								{m.agent_connection_reconnecting()}
@@ -225,6 +276,11 @@
 							<span class="shrink-0 text-xs text-muted-foreground tabular-nums">{elapsed}</span>
 						{/if}
 					</header>
+					{#if selectedEngine && selectedEngine.id !== 'assistant' && selectedEngine.credential_status === 'missing'}
+						<p class="border-b px-3 py-2 text-xs text-muted-foreground" role="status">
+							{m.agent_engine_credential_note()}
+						</p>
+					{/if}
 					<AgentTranscript
 						turns={session.turns}
 						pending={session.pending}

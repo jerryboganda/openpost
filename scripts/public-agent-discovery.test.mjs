@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { extract } from "tar";
 
-import { generateMarketingDiscoveryArtifacts } from "./public-agent-discovery.mjs";
+import { generateMarketingDiscoveryArtifacts, parseSkillFrontmatter } from "./public-agent-discovery.mjs";
 
 const expectedArtifactURLs = [
   {
@@ -22,6 +22,13 @@ const expectedArtifactURLs = [
     url: "https://openpo.st/.well-known/agent-skills/openpost-cli.tar.gz",
   },
 ];
+
+test("CLI skill frontmatter accepts BOM and CRLF", () => {
+  assert.deepEqual(
+    parseSkillFrontmatter("\uFEFF---\r\nname: openpost-cli\r\ndescription: Windows skill\r\n---\r\n# Body"),
+    { name: "openpost-cli", description: "Windows skill" },
+  );
+});
 
 test("marketing discovery build publishes a verifiable complete CLI skill", async (t) => {
   const outputDirectory = await mkdtemp(path.join(os.tmpdir(), "openpost-agent-discovery-"));

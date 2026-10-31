@@ -10,7 +10,11 @@ const release = await lockfile.lock(packageRoot, {
 try {
   // The lockfile heartbeat must keep running while the child writes outputs.
   await new Promise((resolve, reject) => {
-    const child = spawn("svelte-package", { cwd: packageRoot, stdio: "inherit" });
+    const child = spawn("svelte-package", {
+      cwd: packageRoot,
+      stdio: "inherit",
+      shell: process.platform === "win32",
+    });
     child.once("error", reject);
     child.once("close", (code, signal) => {
       if (code === 0) return resolve();

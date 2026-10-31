@@ -178,7 +178,7 @@ export async function generateSocialCatalog({ check = false } = {}) {
   for (const file of (await markdownFiles(docsRoot)).sort()) {
     const page = path.relative(docsRoot, file).split(path.sep).join("/");
     if (page.startsWith("api-reference/") && page !== "api-reference/index.mdx") continue;
-    const source = await readFile(file, "utf8");
+    const source = (await readFile(file, "utf8")).replaceAll("\r\n", "\n");
     pages.push({
       page,
       title: pageTitle(page, source),

@@ -31,6 +31,7 @@ test("precompresses only eligible package-local text assets", async (t) => {
   );
   await assert.rejects(readFile(path.join(directory, "small.css.gz")), /ENOENT/);
   await assert.rejects(readFile(path.join(directory, "image.png.gz")), /ENOENT/);
-  assert.equal((await stat(path.join(directory, "image.png"))).mode & 0o777, 0o644);
-  assert.equal((await stat(path.join(directory, "app.js.gz"))).mode & 0o777, 0o644);
+  const expectedMode = process.platform === "win32" ? 0o666 : 0o644;
+  assert.equal((await stat(path.join(directory, "image.png"))).mode & 0o777, expectedMode);
+  assert.equal((await stat(path.join(directory, "app.js.gz"))).mode & 0o777, expectedMode);
 });

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -24,8 +25,24 @@ import (
 const (
 	MaxPromptCharacters  = 20_000
 	MaxSummaryCharacters = 20_000
+	maxAuditTextBytes = 512
+	maxEventsPerRun = 128
+	maxCallbackEvents = 16
 	maxConversationTitle = 120
+	maxContextHistoryMessages = 19 // Plus the current prompt: 20 turns, as in the built-in assistant.
+	maxContextHistoryBytes    = 16 << 10
+	maxContextMessageBytes    = 4 << 10
 )
+
+var auditSensitive = regexp.MustCompile(`(?i)(?:bearer\s+\S+|(?:authorization|cookie|password|secret|token|api[_-]?key|private[_-]?key)\s*[:=]\s*(?:bearer\s+)?\S+|\bsk-[A-Za-z0-9_-]{8,})`)
+
+func safeAuditText(value string) string {
+	value = auditSensitive.ReplaceAllString(strings.TrimSpace(value), "[redacted]")
+	if len(value) > maxAuditTextBytes {
+		value = string([]rune(value)[:min(len([]rune(value)), maxAuditTextBytes/4)]) + "..."
+	}
+	return value
+}
 
 type Engine string
 
@@ -66,11 +83,15 @@ func (s RunStatus) Terminal() bool {
 var (
 	ErrConversationNotFound = errors.New("conversation not found")
 	ErrRunNotFound          = errors.New("run not found")
+	ErrRunActive            = errors.New("conversation already has an active run")
 	ErrRunTerminal          = errors.New("run has already finished")
 	ErrInvalidEngine        = errors.New("unsupported engine")
 	ErrInvalidPrompt        = errors.New("prompt must contain between 1 and 20000 characters")
 	ErrInvalidCallback      = errors.New("invalid agent callback")
-	ErrRunActive            = errors.New("a run is already in progress in this conversation")
+	ErrGitHubRunIDPending   = errors.New("GitHub Actions has not reported its run ID yet; retry cancellation")
+	ErrGitHubRunUnidentified = errors.New("GitHub Actions run was not identified by its exact title")
+	ErrGitHubRunAmbiguous    = errors.New("multiple GitHub Actions runs have the same agent title")
+	ErrGitHubRunSearchLimit  = errors.New("GitHub Actions run search exceeded its page limit")
 )
 
 type AgentConversation struct {
@@ -111,12 +132,28 @@ type AgentRun struct {
 	Branch         string     `bun:"branch,notnull" json:"branch,omitempty"`
 	DispatchRef    string     `bun:"dispatch_ref,notnull" json:"dispatch_ref,omitempty"`
 	WorkflowURL    string     `bun:"workflow_url,notnull" json:"workflow_url,omitempty"`
+	GitHubRunID    int64      `bun:"github_run_id,notnull" json:"-"`
 	FailureCode    string     `bun:"failure_code,notnull" json:"failure_code,omitempty"`
 	FailureMessage string     `bun:"failure_message,notnull" json:"failure_message,omitempty"`
 	Summary        string     `bun:"summary,notnull" json:"summary,omitempty"`
 	CreatedAt      time.Time  `bun:"created_at,notnull" json:"created_at"`
 	StartedAt      *time.Time `bun:"started_at" json:"started_at,omitempty"`
 	FinishedAt     *time.Time `bun:"finished_at" json:"finished_at,omitempty"`
+}
+
+type AgentContextMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type AgentRunContext struct {
+	RunID          string                `json:"run_id"`
+	ConversationID string                `json:"conversation_id"`
+	Engine         string                `json:"engine"`
+	Prompt         string                `json:"prompt"`
+	BaseRevision   string                `json:"base_revision"`
+	WorkspaceID    string                `json:"workspace_id"`
+	History        []AgentContextMessage `json:"history"`
 }
 
 type AgentEvent struct {
@@ -150,10 +187,13 @@ func decodeEventData(events []AgentEvent) {
 }
 
 type EngineStatus struct {
-	ID        Engine `json:"id"`
-	Label     string `json:"label"`
-	Available bool   `json:"available"`
-	Reason    string `json:"reason,omitempty"`
+	ID                  Engine     `json:"id"`
+	Label               string     `json:"label"`
+	Available           bool       `json:"available"`
+	Reason              string     `json:"reason,omitempty"`
+	DispatchConfigured  bool       `json:"dispatch_configured"`
+	CredentialStatus    string     `json:"credential_status"`
+	CredentialCheckedAt *time.Time `json:"credential_checked_at,omitempty"`
 }
 
 type AgentConversationView struct {
@@ -172,6 +212,7 @@ type CallbackEvent struct {
 
 type AgentCallback struct {
 	RunID          string          `json:"run_id"`
+	GitHubRunID    *int64          `json:"github_run_id,omitempty"`
 	Status         string          `json:"status"`
 	Summary        string          `json:"summary"`
 	FailureCode    string          `json:"failure_code"`
@@ -194,9 +235,17 @@ type DispatchResult struct {
 	URL string
 }
 
+type GitHubRunState struct {
+	ID           int64  `json:"id"`
+	DisplayTitle string `json:"display_title"`
+	Status       string `json:"status"`
+	Conclusion   string `json:"conclusion"`
+}
+
 type Dispatcher interface {
 	Dispatch(ctx context.Context, request DispatchRequest) (DispatchResult, error)
 	Cancel(ctx context.Context, run AgentRun) error
+	LookupRun(ctx context.Context, run AgentRun) (GitHubRunState, error)
 }
 
 type Service struct {
@@ -226,6 +275,12 @@ func NewService(db *bun.DB, dispatcher Dispatcher) *Service {
 // secrets, so a run reports a missing credential as a failed run rather than
 // claiming the engine is available.
 func (s *Service) Engines() []EngineStatus {
+	// Context-free consumers keep the readiness view; the API also checks signed
+	// credential reports through EnginesWithCredentials.
+	return s.engineStatuses()
+}
+
+func (s *Service) engineStatuses() []EngineStatus {
 	dispatchReason := ""
 	if s.dispatcher == nil {
 		dispatchReason = "GitHub Actions dispatch is not configured"
@@ -236,10 +291,11 @@ func (s *Service) Engines() []EngineStatus {
 	}
 	statuses := make([]EngineStatus, 0, 4)
 	statuses = append(statuses, EngineStatus{
-		ID:        EngineAssistant,
-		Label:     "OpenPost Agent",
-		Available: agentReason == "",
-		Reason:    agentReason,
+		ID:               EngineAssistant,
+		Label:            "OpenPost Agent",
+		Available:        agentReason == "",
+		Reason:           agentReason,
+		CredentialStatus: "not_applicable",
 	})
 	for _, engine := range []struct {
 		id    Engine
@@ -249,14 +305,50 @@ func (s *Service) Engines() []EngineStatus {
 		{EngineCodex, "Codex on GitHub Actions"},
 		{EngineClaude, "Claude Code on GitHub Actions"},
 	} {
-		statuses = append(statuses, EngineStatus{
-			ID:        engine.id,
-			Label:     engine.label,
-			Available: dispatchReason == "",
-			Reason:    dispatchReason,
-		})
+		status := EngineStatus{
+			ID:                 engine.id,
+			Label:              engine.label,
+			Available:          dispatchReason == "",
+			Reason:             dispatchReason,
+			DispatchConfigured: dispatchReason == "",
+			CredentialStatus:   "unchecked",
+		}
+		statuses = append(statuses, status)
 	}
 	return statuses
+}
+
+// EnginesWithCredentials adds the latest signed presence report. Presence
+// cannot establish validity until the engine executes successfully.
+func (s *Service) EnginesWithCredentials(ctx context.Context) ([]EngineStatus, error) {
+	statuses := s.engineStatuses()
+	for i := range statuses {
+		status := &statuses[i]
+		if status.ID == EngineAssistant {
+			continue
+		}
+		var check struct {
+			EventKey  string    `bun:"event_key"`
+			CreatedAt time.Time `bun:"created_at"`
+		}
+		err := s.db.NewSelect().TableExpr("admin_agent_events AS e").
+			ColumnExpr("e.event_key, e.created_at").
+			Join("JOIN admin_agent_runs AS r ON r.id = e.run_id").
+			Where("r.engine = ? AND e.kind = ?", status.ID, "credential").
+			Where("e.event_key IN (?)", bun.In([]string{"credentials-present", "credentials-missing"})).
+			OrderExpr("e.created_at DESC, e.seq DESC").Limit(1).Scan(ctx, &check)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("read %s credential check: %w", status.ID, err)
+		}
+		if err == nil {
+			status.CredentialStatus = "present"
+			if check.EventKey == "credentials-missing" {
+				status.CredentialStatus = "missing"
+			}
+			status.CredentialCheckedAt = &check.CreatedAt
+		}
+	}
+	return statuses, nil
 }
 
 func (s *Service) CreateConversation(
@@ -489,6 +581,11 @@ func (s *Service) StartRun(ctx context.Context, input StartRunInput) (*AgentRun,
 		if errors.Is(err, ErrAttachmentNotFound) || errors.Is(err, ErrTooManyAttachments) {
 			return nil, err
 		}
+		message := strings.ToLower(err.Error())
+		if strings.Contains(message, "idx_admin_agent_runs_active_conversation") ||
+			strings.Contains(message, "unique constraint failed: admin_agent_runs.conversation_id") {
+			return nil, ErrRunActive
+		}
 		return nil, fmt.Errorf("start admin agent run: %w", err)
 	}
 
@@ -597,11 +694,19 @@ func (s *Service) launchAgent(ctx context.Context, run *AgentRun) (*AgentRun, er
 	started := s.now().UTC()
 	run.Status = string(RunRunning)
 	run.StartedAt = &started
-	if _, err := s.db.NewUpdate().Model(run).
+	result, err := s.db.NewUpdate().Model(run).
 		Column("status", "started_at").
-		Where("id = ?", run.ID).
-		Exec(ctx); err != nil {
+		Where("id = ? AND status = ?", run.ID, RunQueued).
+		Exec(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("record agent run: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("check agent run start: %w", err)
+	}
+	if affected == 0 {
+		return s.loadAgentRun(ctx, run.ID)
 	}
 	done := make(chan struct{})
 	s.finished.Store(run.ID, done)
@@ -633,11 +738,26 @@ func (s *Service) launchDispatch(ctx context.Context, run *AgentRun, engine Engi
 	run.WorkflowURL = result.URL
 	started := s.now().UTC()
 	run.StartedAt = &started
-	if _, err := s.db.NewUpdate().Model(run).
+	resultUpdate, err := s.db.NewUpdate().Model(run).
 		Column("status", "dispatch_ref", "workflow_url", "started_at").
-		Where("id = ?", run.ID).
-		Exec(ctx); err != nil {
+		Where("id = ? AND status = ?", run.ID, RunQueued).
+		Exec(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("record admin agent dispatch: %w", err)
+	}
+	affected, err := resultUpdate.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("check admin agent dispatch: %w", err)
+	}
+	if affected == 0 {
+		if _, err := s.db.NewUpdate().Model((*AgentRun)(nil)).
+			Set("dispatch_ref = ?", result.Ref).
+			Set("workflow_url = ?", result.URL).
+			Where("id = ?", run.ID).
+			Exec(ctx); err != nil {
+			return nil, fmt.Errorf("record admin agent dispatch reference: %w", err)
+		}
+		return s.loadAgentRun(ctx, run.ID)
 	}
 	s.appendEvent(ctx, run.ID, "dispatch", "dispatch", "Dispatched to GitHub Actions")
 	return run, nil
@@ -649,13 +769,32 @@ func (s *Service) finishWithoutDispatch(ctx context.Context, run *AgentRun, code
 	run.FailureCode = code
 	run.FailureMessage = message
 	run.FinishedAt = &now
-	if _, err := s.db.NewUpdate().Model(run).
-		Column("status", "failure_code", "failure_message", "finished_at").
-		Where("id = ?", run.ID).
-		Exec(ctx); err != nil {
+	applied := false
+	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		result, err := tx.NewUpdate().Model(run).
+			Column("status", "failure_code", "failure_message", "finished_at").
+			Where("id = ? AND status = ?", run.ID, RunQueued).
+			Exec(ctx)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil || affected == 0 {
+			return err
+		}
+		applied = true
+		return appendEventTx(ctx, tx, run.ID, code, "error", message, nil, now)
+	}); err != nil {
 		return fmt.Errorf("record admin agent dispatch failure: %w", err)
 	}
-	s.appendEvent(ctx, run.ID, code, "error", message)
+	if !applied {
+		current, err := s.loadAgentRun(ctx, run.ID)
+		if err != nil {
+			return err
+		}
+		*run = *current
+		return nil
+	}
 	return nil
 }
 
@@ -674,6 +813,9 @@ func (s *Service) CancelRun(ctx context.Context, runID string) (*AgentRun, error
 		if s.dispatcher == nil {
 			return nil, errors.New("GitHub Actions cancellation is not configured")
 		}
+		if run.GitHubRunID == 0 {
+			return nil, ErrGitHubRunIDPending
+		}
 		if err := s.dispatcher.Cancel(ctx, *run); err != nil {
 			return nil, fmt.Errorf("cancel GitHub Actions run: %w", err)
 		}
@@ -681,17 +823,27 @@ func (s *Service) CancelRun(ctx context.Context, runID string) (*AgentRun, error
 	now := s.now().UTC()
 	run.Status = string(RunCanceled)
 	run.FinishedAt = &now
-	result, err := s.db.NewUpdate().Model(run).
-		Column("status", "finished_at").
-		Where("id = ? AND status IN (?)", run.ID, bun.List([]string{string(RunQueued), string(RunDispatched), string(RunRunning)})).
-		Exec(ctx)
-	if err != nil {
+	applied := false
+	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		result, err := tx.NewUpdate().Model(run).
+			Column("status", "finished_at").
+			Where("id = ? AND status IN (?)", run.ID, bun.List([]string{string(RunQueued), string(RunDispatched), string(RunRunning)})).
+			Exec(ctx)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil || affected == 0 {
+			return err
+		}
+		applied = true
+		return appendEventTx(ctx, tx, run.ID, "canceled", "status", "Canceled by an administrator", nil, now)
+	}); err != nil {
 		return nil, fmt.Errorf("cancel admin agent run: %w", err)
 	}
-	if affected, err := result.RowsAffected(); err != nil || affected == 0 {
+	if !applied {
 		return nil, ErrRunTerminal
 	}
-	s.appendEvent(ctx, run.ID, "canceled", "status", "Canceled by an administrator")
 	s.cancelRunContext(run.ID)
 	return run, nil
 }
@@ -705,18 +857,56 @@ func (s *Service) ApplyCallback(ctx context.Context, callback AgentCallback) (*A
 	if err != nil {
 		return nil, err
 	}
+	if callback.GitHubRunID != nil {
+		if Engine(run.Engine) == EngineAssistant {
+			return nil, ErrInvalidCallback
+		}
+		// Bind a signed Actions identity once; duplicates are harmless, conflicting IDs are rejected.
+		result, err := s.db.NewUpdate().Model((*AgentRun)(nil)).
+			Set("github_run_id = ?", *callback.GitHubRunID).
+			Where("id = ? AND github_run_id IN (0, ?)", run.ID, *callback.GitHubRunID).
+			Exec(ctx)
+		if err != nil {
+			message := strings.ToLower(err.Error())
+			if strings.Contains(message, "idx_admin_agent_runs_github_run_id") ||
+				strings.Contains(message, "unique constraint failed: admin_agent_runs.github_run_id") {
+				return nil, ErrInvalidCallback
+			}
+			return nil, fmt.Errorf("record GitHub Actions run ID: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return nil, fmt.Errorf("check GitHub Actions run ID: %w", err)
+		}
+		if affected == 0 {
+			return nil, ErrInvalidCallback
+		}
+		run.GitHubRunID = *callback.GitHubRunID
+	}
 	if RunStatus(run.Status) == RunCanceled {
 		s.appendEvent(ctx, run.ID, "late-result", "error",
 			"The engine reported a result after the run was canceled")
 		return run, nil
 	}
-	if callbackBlocked(run, status) {
+	if callbackBlocked(run, status, callback) {
 		return run, nil
 	}
 	now := s.now().UTC()
 	applyAgentCallbackFields(run, status, callback, now)
-	if err := s.persistAgentCallback(ctx, run, callback, now); err != nil {
+	applied, err := s.persistAgentCallback(ctx, run, status, callback, now)
+	if err != nil {
 		return nil, err
+	}
+	if !applied {
+		current, err := s.loadAgentRun(ctx, callback.RunID)
+		if err != nil {
+			return nil, err
+		}
+		if RunStatus(current.Status) == RunCanceled {
+			s.appendEvent(ctx, current.ID, "late-result", "error",
+				"The engine reported a result after the run was canceled")
+		}
+		return current, nil
 	}
 	return run, nil
 }
@@ -727,9 +917,20 @@ func validateAgentCallback(callback *AgentCallback) (RunStatus, error) {
 	if callback.RunID == "" {
 		return "", ErrInvalidCallback
 	}
+	if callback.GitHubRunID != nil && *callback.GitHubRunID <= 0 {
+		return "", ErrInvalidCallback
+	}
 	status := RunStatus(callback.Status)
 	if status != RunRunning && status != RunSucceeded && status != RunFailed {
 		return "", ErrInvalidCallback
+	}
+	if len(callback.Events) > maxCallbackEvents {
+		return "", ErrInvalidCallback
+	}
+	for _, event := range callback.Events {
+		if len(event.Key) > 80 || len(event.Kind) > 32 || len(event.AgentMessage) > maxAuditTextBytes || len(event.Data) > 0 {
+			return "", ErrInvalidCallback
+		}
 	}
 	return status, nil
 }
@@ -745,10 +946,14 @@ func (s *Service) loadAgentRun(ctx context.Context, runID string) (*AgentRun, er
 	return run, nil
 }
 
-// callbackBlocked keeps terminal runs immutable except for one case: an engine
-// that finished after a restart may correct an interrupted run's unknown state.
-func callbackBlocked(run *AgentRun, status RunStatus) bool {
+// callbackBlocked allows a late signed credential failure to refine a generic
+// GitHub recovery failure without reopening canceled or successful runs.
+func callbackBlocked(run *AgentRun, status RunStatus, callback AgentCallback) bool {
 	if !RunStatus(run.Status).Terminal() {
+		return false
+	}
+	if run.Status == string(RunFailed) && run.FailureCode == "github_failure" && status == RunFailed &&
+		callback.FailureCode == "missing_"+run.Engine+"_credentials" {
 		return false
 	}
 	return run.Status != string(RunFailed) || run.FailureCode != "interrupted" || !status.Terminal()
@@ -766,7 +971,7 @@ func applyAgentCallbackFields(run *AgentRun, status RunStatus, callback AgentCal
 		if len([]rune(summary)) > MaxSummaryCharacters {
 			summary = string([]rune(summary)[:MaxSummaryCharacters])
 		}
-		run.Summary = summary
+		run.Summary = safeAuditText(summary)
 	}
 	if branch := strings.TrimSpace(callback.Branch); branch != "" {
 		run.Branch = branch
@@ -775,31 +980,51 @@ func applyAgentCallbackFields(run *AgentRun, status RunStatus, callback AgentCal
 		run.BaseRevision = revision
 	}
 	if status == RunFailed {
-		run.FailureCode = strings.TrimSpace(callback.FailureCode)
-		if run.FailureCode == "" {
+		run.FailureCode = safeAuditText(callback.FailureCode)
+		// Only startup reconciliation may set the recoverable interrupted marker.
+		if run.FailureCode == "" || run.FailureCode == "interrupted" {
 			run.FailureCode = "engine_failed"
 		}
-		run.FailureMessage = strings.TrimSpace(callback.FailureMessage)
+		run.FailureMessage = safeAuditText(callback.FailureMessage)
 		if run.FailureMessage == "" {
 			run.FailureMessage = "The engine reported a failure"
 		}
+	} else if status == RunSucceeded {
+		run.FailureCode = ""
+		run.FailureMessage = ""
 	}
 }
 
-func (s *Service) persistAgentCallback(ctx context.Context, run *AgentRun, callback AgentCallback, now time.Time) error {
+func (s *Service) persistAgentCallback(ctx context.Context, run *AgentRun, status RunStatus, callback AgentCallback, now time.Time) (bool, error) {
+	applied := false
 	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewUpdate().Model(run).
+		update := tx.NewUpdate().Model(run).
 			Column("status", "branch", "base_revision", "summary", "failure_code", "failure_message", "started_at", "finished_at").
-			Where("id = ?", run.ID).
-			Exec(ctx); err != nil {
+			Where("id = ? AND status IN (?)", run.ID, bun.List([]string{string(RunQueued), string(RunDispatched), string(RunRunning)}))
+		if status.Terminal() {
+			update.WhereOr("id = ? AND status = ? AND failure_code = ?", run.ID, RunFailed, "interrupted")
+		}
+		if status == RunFailed && callback.FailureCode == "missing_"+run.Engine+"_credentials" {
+			update.WhereOr("id = ? AND status = ? AND failure_code = ?", run.ID, RunFailed, "github_failure")
+		}
+		result, err := update.Exec(ctx)
+		if err != nil {
 			return err
 		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return nil
+		}
+		applied = true
 		for index, event := range callback.Events {
 			key := strings.TrimSpace(event.Key)
 			if key == "" {
 				key = fmt.Sprintf("callback-%d", index)
 			}
-			if err := appendEventTx(ctx, tx, run.ID, key, event.Kind, event.AgentMessage, event.Data, now); err != nil {
+			if err := appendEventTx(ctx, tx, run.ID, key, event.Kind, event.AgentMessage, nil, now); err != nil {
 				return err
 			}
 		}
@@ -808,9 +1033,9 @@ func (s *Service) persistAgentCallback(ctx context.Context, run *AgentRun, callb
 		}
 		return nil
 	}); err != nil {
-		return fmt.Errorf("apply admin agent callback: %w", err)
+		return false, fmt.Errorf("apply admin agent callback: %w", err)
 	}
-	return nil
+	return applied, nil
 }
 
 func (s *Service) Events(ctx context.Context, runID string, afterSeq int64) ([]AgentEvent, error) {
@@ -839,11 +1064,77 @@ func (s *Service) GetRun(ctx context.Context, runID string) (*AgentRun, error) {
 	return run, nil
 }
 
-// FailInterrupted marks runs that were in flight when this process last
-// stopped. The engine may still have finished, so the failure states that the
-// outcome is unknown instead of claiming success or failure.
-func (s *Service) FailInterrupted(ctx context.Context) (int, error) {
-	now := s.now().UTC()
+// GetRunContext reads only messages before this run, scoped to its conversation.
+// The Workspace ID is descriptive; runner authorization remains independent.
+func (s *Service) GetRunContext(ctx context.Context, runID string) (*AgentRunContext, error) {
+	run, err := s.GetRun(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	conversation := new(AgentConversation)
+	if err := s.db.NewSelect().Model(conversation).
+		Where("id = ?", run.ConversationID).Scan(ctx); err != nil {
+		return nil, fmt.Errorf("load admin agent run conversation: %w", err)
+	}
+	previous := make([]AgentMessage, 0)
+	if err := s.db.NewSelect().Model(&previous).
+		Where("conversation_id = ? AND created_at < ?", run.ConversationID, run.CreatedAt).
+		Where("role IN (?)", bun.In([]string{"user", "assistant"})).
+		OrderExpr("created_at DESC, id DESC").
+		Limit(maxContextHistoryMessages).
+		Scan(ctx); err != nil {
+		return nil, fmt.Errorf("load admin agent run history: %w", err)
+	}
+	result := &AgentRunContext{
+		RunID: run.ID, ConversationID: run.ConversationID,
+		Engine: run.Engine, Prompt: run.Prompt, BaseRevision: run.BaseRevision,
+		History: make([]AgentContextMessage, 0, len(previous)),
+	}
+	if conversation.WorkspaceID != nil {
+		result.WorkspaceID = *conversation.WorkspaceID
+	}
+	remaining := maxContextHistoryBytes
+	for _, message := range previous {
+		entry, size := boundedContextMessage(message.Role, message.Content, min(maxContextMessageBytes, remaining-1))
+		if size+1 > remaining {
+			break
+		}
+		result.History = append(result.History, entry)
+		remaining -= size + 1 // Each JSON array entry also needs a separator.
+	}
+	for i, j := 0, len(result.History)-1; i < j; i, j = i+1, j-1 {
+		result.History[i], result.History[j] = result.History[j], result.History[i]
+	}
+	return result, nil
+}
+
+func boundedContextMessage(role, content string, maxBytes int) (AgentContextMessage, int) {
+	entry := AgentContextMessage{Role: role, Content: content}
+	encoded, _ := json.Marshal(entry)
+	if len(encoded) <= maxBytes {
+		return entry, len(encoded)
+	}
+	runes := []rune(content)
+	const suffix = " [truncated]"
+	low, high := 0, len(runes)
+	for low < high {
+		mid := (low + high + 1) / 2
+		entry.Content = string(runes[:mid]) + suffix
+		encoded, _ = json.Marshal(entry)
+		if len(encoded) <= maxBytes {
+			low = mid
+		} else {
+			high = mid - 1
+		}
+	}
+	entry.Content = string(runes[:low]) + suffix
+	encoded, _ = json.Marshal(entry)
+	return entry, len(encoded)
+}
+
+// ReconcileInterrupted fails in-process assistant work and checks coding work
+// against GitHub before changing its status. Unverifiable coding runs remain active.
+func (s *Service) ReconcileInterrupted(ctx context.Context) (int, error) {
 	runs := make([]AgentRun, 0)
 	if err := s.db.NewSelect().Model(&runs).
 		Where("status IN (?)", bun.List([]string{
@@ -852,22 +1143,159 @@ func (s *Service) FailInterrupted(ctx context.Context) (int, error) {
 		Scan(ctx); err != nil {
 		return 0, fmt.Errorf("list interrupted admin agent runs: %w", err)
 	}
-	for index := range runs {
-		run := &runs[index]
-		run.Status = string(RunFailed)
-		run.FailureCode = "interrupted"
-		run.FailureMessage = "OpenPost restarted before the engine reported a result. The outcome is unknown."
-		run.FinishedAt = &now
-		if _, err := s.db.NewUpdate().Model(run).
-			Column("status", "failure_code", "failure_message", "finished_at").
-			Where("id = ?", run.ID).
-			Exec(ctx); err != nil {
-			return index, fmt.Errorf("mark interrupted admin agent run: %w", err)
+	count := 0
+	var failures []error
+	for i := range runs {
+		run := &runs[i]
+		var changed bool
+		var err error
+		if Engine(run.Engine) == EngineAssistant {
+			changed, err = s.interruptAssistant(ctx, run)
+		} else {
+			changed, err = s.reconcileGitHubRun(ctx, run)
+			if err != nil {
+				message := "GitHub Actions could not be verified after restart; this run's outcome is unknown."
+				if eventErr := s.recoveryEvent(ctx, run.ID, "recovery-unknown", "progress", message); eventErr != nil {
+					err = errors.Join(err, eventErr)
+				}
+			}
 		}
-		s.appendEvent(ctx, run.ID, fmt.Sprintf("interrupted-%d", index), "error",
-			run.FailureMessage)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("reconcile admin agent run %s: %w", run.ID, err))
+		}
+		if changed {
+			count++
+		}
 	}
-	return len(runs), nil
+	return count, errors.Join(failures...)
+}
+
+func (s *Service) interruptAssistant(ctx context.Context, run *AgentRun) (bool, error) {
+	now := s.now().UTC()
+	run.Status = string(RunFailed)
+	run.FailureCode = "interrupted"
+	run.FailureMessage = "OpenPost restarted before the built-in assistant finished. Its generation cannot resume."
+	run.FinishedAt = &now
+	applied := false
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		result, err := tx.NewUpdate().Model(run).
+			Column("status", "failure_code", "failure_message", "finished_at").
+			Where("id = ? AND status IN (?)", run.ID, bun.List([]string{string(RunQueued), string(RunDispatched), string(RunRunning)})).
+			Exec(ctx)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil || affected == 0 {
+			return err
+		}
+		applied = true
+		return appendEventTx(ctx, tx, run.ID, "assistant-interrupted", "error", run.FailureMessage, nil, now)
+	})
+	return applied, err
+}
+
+func (s *Service) reconcileGitHubRun(ctx context.Context, run *AgentRun) (bool, error) {
+	if s.dispatcher == nil {
+		return false, errors.New("GitHub Actions is not configured")
+	}
+	remote, err := s.dispatcher.LookupRun(ctx, *run)
+	if err != nil {
+		return false, err
+	}
+	if remote.ID <= 0 {
+		return false, ErrGitHubRunUnidentified
+	}
+	if run.GitHubRunID == 0 {
+		result, err := s.db.NewUpdate().Model((*AgentRun)(nil)).
+			Set("github_run_id = ?", remote.ID).
+			Where("id = ? AND github_run_id = 0 AND status IN (?)", run.ID, bun.List([]string{string(RunQueued), string(RunDispatched), string(RunRunning)})).
+			Exec(ctx)
+		if err != nil {
+			return false, fmt.Errorf("bind recovered GitHub Actions run ID: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return false, err
+		}
+		if affected == 0 {
+			current, err := s.loadAgentRun(ctx, run.ID)
+			if err != nil {
+				return false, err
+			}
+			if RunStatus(current.Status).Terminal() {
+				return false, nil // A callback or cancellation won the race.
+			}
+			if current.GitHubRunID != remote.ID {
+				return false, ErrGitHubRunAmbiguous
+			}
+			*run = *current
+		} else {
+			run.GitHubRunID = remote.ID
+		}
+	}
+
+	switch remote.Status {
+	case "queued", "requested", "pending", "waiting":
+		return true, s.recoveryEvent(ctx, run.ID, "recovery-"+remote.Status, "progress",
+			"GitHub Actions is still "+remote.Status+" after the server restart.")
+	case "in_progress":
+		if _, err := s.db.NewUpdate().Model((*AgentRun)(nil)).
+			Set("status = ?", RunRunning).
+			Set("started_at = COALESCE(started_at, ?)", s.now().UTC()).
+			Where("id = ? AND github_run_id = ? AND status IN (?)", run.ID, remote.ID, bun.List([]string{string(RunQueued), string(RunDispatched)})).
+			Exec(ctx); err != nil {
+			return false, err
+		}
+		return true, s.recoveryEvent(ctx, run.ID, "recovery-in-progress", "progress",
+			"GitHub Actions is still running after the server restart.")
+	case "completed":
+		status, code, message, ok := githubConclusion(remote.Conclusion)
+		if !ok {
+			return false, fmt.Errorf("unknown GitHub Actions conclusion %q", remote.Conclusion)
+		}
+		now := s.now().UTC()
+		applied := false
+		err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+			result, err := tx.NewUpdate().Model((*AgentRun)(nil)).
+				Set("status = ?", status).
+				Set("failure_code = ?", code).
+				Set("failure_message = ?", message).
+				Set("finished_at = ?", now).
+				Where("id = ? AND github_run_id = ? AND status IN (?)", run.ID, remote.ID, bun.List([]string{string(RunQueued), string(RunDispatched), string(RunRunning)})).
+				Exec(ctx)
+			if err != nil {
+				return err
+			}
+			affected, err := result.RowsAffected()
+			if err != nil || affected == 0 {
+				return err
+			}
+			applied = true
+			return appendEventTx(ctx, tx, run.ID, "recovery-completed", "status",
+				"GitHub Actions completed with conclusion "+remote.Conclusion+"; no final agent summary was received.", nil, now)
+		})
+		return applied, err
+	default:
+		return false, fmt.Errorf("unknown GitHub Actions status %q", remote.Status)
+	}
+}
+
+func githubConclusion(conclusion string) (RunStatus, string, string, bool) {
+	switch conclusion {
+	case "success":
+		return RunSucceeded, "", "", true
+	case "cancelled":
+		return RunCanceled, "", "", true
+	case "failure", "timed_out", "action_required", "neutral", "skipped", "stale", "startup_failure":
+		return RunFailed, "github_" + conclusion, "GitHub Actions completed with conclusion " + conclusion + ".", true
+	default:
+		return "", "", "", false
+	}
+}
+
+func (s *Service) recoveryEvent(ctx context.Context, runID, key, kind, message string) error {
+	return s.appendEvent(ctx, runID, key, kind, message)
 }
 
 func (s *Service) runExists(ctx context.Context, runID string) (bool, error) {
@@ -881,8 +1309,19 @@ func (s *Service) runExists(ctx context.Context, runID string) (bool, error) {
 	return true, nil
 }
 
-func (s *Service) appendEvent(ctx context.Context, runID, key, kind, message string) {
-	_ = appendEventTx(ctx, s.db, runID, key, kind, message, nil, s.now().UTC())
+func (s *Service) appendEvent(ctx context.Context, runID, key, kind, message string) error {
+	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		// Serialize per-run sequence allocation with callback transactions.
+		if _, err := tx.NewUpdate().Model((*AgentRun)(nil)).
+			Set("status = status").Where("id = ?", runID).Exec(ctx); err != nil {
+			return err
+		}
+		return appendEventTx(ctx, tx, runID, key, kind, message, nil, s.now().UTC())
+	})
+}
+
+func (s *Service) RecordWorkflowAction(ctx context.Context, runID, key, state, outcome string) error {
+	return s.appendEvent(ctx, runID, "workflow-write-"+key, "action", state+": "+outcome)
 }
 
 type execer interface {
@@ -913,6 +1352,13 @@ func appendEventTx(
 			return nil
 		}
 	}
+	var count int
+	if err := db.NewSelect().Model((*AgentEvent)(nil)).ColumnExpr("COUNT(*)").Where("run_id = ?", runID).Scan(ctx, &count); err != nil {
+		return err
+	}
+	if count >= maxEventsPerRun {
+		return nil
+	}
 	var maxSeq int64
 	if err := db.NewSelect().Model((*AgentEvent)(nil)).
 		ColumnExpr("COALESCE(MAX(seq), 0)").
@@ -929,8 +1375,8 @@ func appendEventTx(
 		RunID:        runID,
 		Seq:          maxSeq + 1,
 		EventKey:     key,
-		Kind:         kind,
-		AgentMessage: strings.TrimSpace(message),
+		Kind:         safeAuditText(kind),
+		AgentMessage: safeAuditText(message),
 		DataJSON:     encoded,
 		CreatedAt:    now,
 	}

@@ -1,19 +1,17 @@
 name: Fork Release
 
 # Fork-only delivery path: build and smoke-test the production image on GitHub
-# Actions, publish it by digest, then deploy that exact digest to this VPS with
-# a database backup and automatic rollback. The production VPS never builds.
+# Actions, publish it by digest, then optionally deploy that exact digest to
+# the VPS after the deployed source and image have been reconciled. The VPS never builds.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       mode:
         description: Build a new image or deploy an already tested digest
         required: true
-        default: build-and-deploy
+        default: build-only
         type: choice
-        options: [build-and-deploy, deploy-only]
+        options: [build-only, build-and-deploy, deploy-only]
       image:
         description: Digest-pinned image for deploy-only mode
         required: false
@@ -38,7 +36,7 @@ env:
 jobs:
   build:
     name: Build and smoke-test the image
-    if: github.event_name == 'push' || inputs.mode == 'build-and-deploy'
+    if: inputs.mode != 'deploy-only'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
@@ -106,8 +104,14 @@ jobs:
   deploy:
     name: Deploy the tested digest
     needs: build
+    # Fail closed until exact running VPS image/source and GitHub baseline proof
+    # is established independently. A repository variable is not that proof.
+    # Re-enable only as part of a reviewed, verified deployment change.
     if: |
-      always() && vars.OPENPOST_DEPLOY_ENABLED == 'true' &&
+      false && always() && github.ref == 'refs/heads/main' &&
+      inputs.mode != 'build-only' &&
+      vars.OPENPOST_DEPLOY_ENABLED == 'true' &&
+      vars.OPENPOST_VPS_BASELINE_VERIFIED == 'true' &&
       (needs.build.result == 'success' || inputs.mode == 'deploy-only')
     runs-on: ubuntu-latest
     timeout-minutes: 30

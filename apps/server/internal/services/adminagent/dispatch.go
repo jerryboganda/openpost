@@ -11,12 +11,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
 const (
 	githubAPIBase           = "https://api.github.com"
+	githubRunsPerPage       = 100
+	githubRunSearchPages    = 5
+	githubResponseMaxBytes  = 2 << 20
 	callbackSkew            = 5 * time.Minute
 	CallbackTimestampHeader = "X-OpenPost-Agent-Timestamp"
 	CallbackSignatureHeader = "X-OpenPost-Agent-Signature"
@@ -95,44 +99,94 @@ func (d *GitHubDispatcher) Dispatch(ctx context.Context, request DispatchRequest
 }
 
 func (d *GitHubDispatcher) Cancel(ctx context.Context, run AgentRun) error {
-	url := fmt.Sprintf(
-		"%s/repos/%s/actions/workflows/%s/runs?event=workflow_dispatch&per_page=100",
-		githubAPIBase, d.config.Repository, d.config.Workflow,
-	)
-	response, err := d.do(ctx, http.MethodGet, url, nil)
+	if run.GitHubRunID <= 0 {
+		return ErrGitHubRunIDPending
+	}
+	url := fmt.Sprintf("%s/repos/%s/actions/runs/%d/cancel", githubAPIBase, d.config.Repository, run.GitHubRunID)
+	response, err := d.do(ctx, http.MethodPost, url, nil)
 	if err != nil {
 		return err
 	}
 	defer response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("GitHub Actions cancel failed with status %d", response.StatusCode)
+	}
+	return nil
+}
+
+// LookupRun trusts a stored, signed run ID. Before registration, it accepts
+// only an unambiguous exact workflow title within a bounded dispatch search.
+func (d *GitHubDispatcher) LookupRun(ctx context.Context, run AgentRun) (GitHubRunState, error) {
+	title := "openpost-agent-" + run.ID
+	if run.GitHubRunID > 0 {
+		endpoint := fmt.Sprintf("%s/repos/%s/actions/runs/%d", githubAPIBase, d.config.Repository, run.GitHubRunID)
+		var remote GitHubRunState
+		if err := d.getJSON(ctx, endpoint, &remote); err != nil {
+			return GitHubRunState{}, err
+		}
+		if remote.ID != run.GitHubRunID || remote.DisplayTitle != title {
+			return GitHubRunState{}, ErrGitHubRunUnidentified
+		}
+		return remote, nil
+	}
+
+	var matched GitHubRunState
+	for page := 1; page <= githubRunSearchPages; page++ {
+		query := url.Values{}
+		query.Set("event", "workflow_dispatch")
+		query.Set("created", ">="+run.CreatedAt.Add(-5*time.Minute).UTC().Format(time.RFC3339))
+		query.Set("per_page", fmt.Sprint(githubRunsPerPage))
+		query.Set("page", fmt.Sprint(page))
+		endpoint := fmt.Sprintf("%s/repos/%s/actions/workflows/%s/runs?%s", githubAPIBase, d.config.Repository, d.config.Workflow, query.Encode())
+		var listing struct {
+			TotalCount   int              `json:"total_count"`
+			WorkflowRuns []GitHubRunState `json:"workflow_runs"`
+		}
+		if err := d.getJSON(ctx, endpoint, &listing); err != nil {
+			return GitHubRunState{}, err
+		}
+		if listing.TotalCount > githubRunsPerPage*githubRunSearchPages {
+			return GitHubRunState{}, ErrGitHubRunSearchLimit
+		}
+		for _, remote := range listing.WorkflowRuns {
+			if remote.DisplayTitle != title || remote.ID <= 0 {
+				continue
+			}
+			if matched.ID != 0 {
+				return GitHubRunState{}, ErrGitHubRunAmbiguous
+			}
+			matched = remote
+		}
+		if len(listing.WorkflowRuns) < githubRunsPerPage || (listing.TotalCount > 0 && page*githubRunsPerPage >= listing.TotalCount) {
+			if matched.ID == 0 {
+				return GitHubRunState{}, ErrGitHubRunUnidentified
+			}
+			return matched, nil
+		}
+	}
+	return GitHubRunState{}, ErrGitHubRunSearchLimit
+}
+
+func (d *GitHubDispatcher) getJSON(ctx context.Context, endpoint string, target any) error {
+	response, err := d.do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("query GitHub Actions: %w", err)
+	}
+	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("GitHub Actions run lookup failed with status %d", response.StatusCode)
+		return fmt.Errorf("GitHub Actions lookup returned HTTP %d", response.StatusCode)
 	}
-	var listing struct {
-		WorkflowRuns []struct {
-			ID           int64  `json:"id"`
-			DisplayTitle string `json:"display_title"`
-		} `json:"workflow_runs"`
+	body, err := io.ReadAll(io.LimitReader(response.Body, githubResponseMaxBytes+1))
+	if err != nil {
+		return fmt.Errorf("read GitHub Actions response: %w", err)
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&listing); err != nil {
-		return errors.New("GitHub Actions run lookup returned an unreadable response")
+	if len(body) > githubResponseMaxBytes {
+		return errors.New("GitHub Actions response exceeded recovery limit")
 	}
-	expected := AgentRunTitle(run.ID)
-	for _, candidate := range listing.WorkflowRuns {
-		if candidate.DisplayTitle != expected {
-			continue
-		}
-		cancelURL := fmt.Sprintf("%s/repos/%s/actions/runs/%d/cancel", githubAPIBase, d.config.Repository, candidate.ID)
-		cancelResponse, err := d.do(ctx, http.MethodPost, cancelURL, nil)
-		if err != nil {
-			return err
-		}
-		defer cancelResponse.Body.Close()
-		if cancelResponse.StatusCode != http.StatusAccepted {
-			return fmt.Errorf("GitHub Actions cancel failed with status %d", cancelResponse.StatusCode)
-		}
-		return nil
+	if err := json.Unmarshal(body, target); err != nil {
+		return fmt.Errorf("decode GitHub Actions response: %w", err)
 	}
-	return fmt.Errorf("GitHub Actions run %s is not visible for cancellation yet", run.ID)
+	return nil
 }
 
 func (d *GitHubDispatcher) do(ctx context.Context, method, url string, body []byte) (*http.Response, error) {
@@ -151,12 +205,6 @@ func (d *GitHubDispatcher) do(ctx context.Context, method, url string, body []by
 		request.Header.Set("Content-Type", "application/json")
 	}
 	return d.client.Do(request)
-}
-
-// AgentRunTitle is the workflow run's display title. It lets cancellation find
-// the exact Actions run without trusting a client-supplied run id.
-func AgentRunTitle(runID string) string {
-	return "openpost-agent-" + runID
 }
 
 func SignCallback(secret, timestamp string, body []byte) string {

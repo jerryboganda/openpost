@@ -63,7 +63,7 @@ ${plans}
 }
 
 const catalog = JSON.parse(await readFile(sourcePath, "utf8"));
-const generated = renderCatalog(catalog);
+const generated = renderCatalog(catalog).replaceAll("\r\n", "\n");
 
 if (process.argv.includes("--check")) {
   const current = await readFile(outputPath, "utf8");

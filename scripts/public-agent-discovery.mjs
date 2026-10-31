@@ -91,14 +91,18 @@ async function latestReleasedVersion(changelogPath = path.join(repositoryRoot, "
   return match[1];
 }
 
+export function parseSkillFrontmatter(skillSource) {
+  const frontmatter = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u.exec(skillSource);
+  if (!frontmatter)
+    throw new Error(".agents/skills/openpost-cli/SKILL.md must contain YAML frontmatter");
+  return parseYaml(frontmatter[1]);
+}
+
 async function writeAgentSkill(outputDirectory) {
   const agentSkillsDirectory = path.join(outputDirectory, ".well-known/agent-skills");
   const archivePath = path.join(agentSkillsDirectory, "openpost-cli.tar.gz");
   const skillSource = await readFile(path.join(skillDirectory, "SKILL.md"), "utf8");
-  const frontmatter = /^---\n([\s\S]*?)\n---(?:\n|$)/u.exec(skillSource);
-  if (!frontmatter)
-    throw new Error(".agents/skills/openpost-cli/SKILL.md must contain YAML frontmatter");
-  const skill = parseYaml(frontmatter[1]);
+  const skill = parseSkillFrontmatter(skillSource);
   if (skill?.name !== "openpost-cli" || typeof skill.description !== "string") {
     throw new Error(
       ".agents/skills/openpost-cli/SKILL.md must declare its canonical name and description",

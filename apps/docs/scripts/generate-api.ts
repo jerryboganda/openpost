@@ -1,11 +1,12 @@
 import { readdir, rm } from "node:fs/promises";
+import { resolve } from "node:path";
 import { generateFiles } from "fumadocs-openapi";
 import { openapi } from "../lib/openapi";
 
 // Subfolders contain only generated operations. Remove retired endpoints on regeneration.
 for (const entry of await readdir("./content/docs/api-reference", { withFileTypes: true })) {
   if (entry.isDirectory())
-    await rm(`./content/docs/api-reference/${entry.name}`, { recursive: true });
+    await rm(resolve("./content/docs/api-reference", entry.name), { recursive: true });
 }
 
 await generateFiles({

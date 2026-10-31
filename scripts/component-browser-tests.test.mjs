@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 const nodeExecutable = execFileSync("node", ["-p", "process.execPath"], {
@@ -33,7 +34,7 @@ function runBrowser(args = [], failure = null) {
     );
     const result = spawnSync(
       nodeExecutable,
-      ["--import", preload, path.resolve("apps/web/scripts/component-browser-tests.mjs"), ...args],
+      ["--import", pathToFileURL(preload).href, path.resolve("apps/web/scripts/component-browser-tests.mjs"), ...args],
       { cwd: directory, encoding: "utf8", timeout: 10000 },
     );
     let calls = [];

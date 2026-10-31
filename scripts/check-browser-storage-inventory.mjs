@@ -36,7 +36,7 @@ function walk(relativeRoot) {
       if ([".svelte-kit", "build", "dist", "node_modules"].includes(entry.name)) continue;
       results.push(...walk(relative(repositoryRoot, absolute)));
     } else {
-      const path = relative(repositoryRoot, absolute);
+      const path = relative(repositoryRoot, absolute).replaceAll("\\", "/");
       if (isSourceFile(path)) results.push(path);
     }
   }

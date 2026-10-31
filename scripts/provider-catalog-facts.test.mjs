@@ -15,6 +15,7 @@ var providerCatalog = []ProviderInfo{
 func next() {}
 `;
   assert.deepEqual(backendProviderCatalog(source), ["x", "mastodon"]);
+  assert.deepEqual(backendProviderCatalog(source.replaceAll("\n", "\r\n")), ["x", "mastodon"]);
 });
 
 test("rejects public total copy that drifts from the catalogue", () => {

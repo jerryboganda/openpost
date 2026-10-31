@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const bun = process.versions.bun ? process.execPath : "bun";
 const env = {
   ...process.env,
   GOCACHE: process.env.GOCACHE || path.join(root, ".devenv", "state", "go-build"),
@@ -27,9 +28,9 @@ const snapshot = await mkdtemp(path.join(os.tmpdir(), "openpost-contracts-"));
 let changed;
 try {
   await copySourceSnapshot(snapshot);
-  run("bun", ["scripts/sync-docs-openapi.mjs"], snapshot);
-  run("bun", ["run", "--filter", "@openpost/web", "generate:types"], snapshot);
-  run("bun", ["scripts/generate-selected-automation-contract.mjs"], snapshot);
+  run(bun, ["scripts/sync-docs-openapi.mjs"], snapshot);
+  run(bun, ["run", "--filter", "@openpost/web", "generate:types"], snapshot);
+  run(bun, ["scripts/generate-selected-automation-contract.mjs"], snapshot);
   const expected = await generatedHashes(snapshot);
   const current = await generatedHashes(root);
   changed = generatedPaths.filter((file) => current.get(file) !== expected.get(file));
@@ -49,9 +50,13 @@ async function copySourceSnapshot(destination) {
   const listed = spawnSync(
     "git",
     ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-    { cwd: root, encoding: "utf8" },
+    { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
   );
-  if (listed.status !== 0) throw new Error("Failed to list source files for contract check");
+  if (listed.error) throw listed.error;
+  if (listed.status !== 0)
+    throw new Error(
+      `Failed to list source files for contract check (exit ${listed.status}): ${listed.stderr}`,
+    );
   const files = [...new Set(listed.stdout.split("\0").filter(Boolean))];
   for (const file of files) {
     const target = path.join(destination, file);
@@ -72,7 +77,11 @@ async function copySourceSnapshot(destination) {
   for (const directory of packageRoots) {
     const modules = path.join(root, directory, "node_modules");
     try {
-      await symlink(modules, path.join(destination, directory, "node_modules"), "dir");
+      await symlink(
+        modules,
+        path.join(destination, directory, "node_modules"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
     }
@@ -101,6 +110,7 @@ async function generatedHashes(directory) {
 
 function run(command, args, cwd) {
   const result = spawnSync(command, args, { cwd, env, stdio: "inherit" });
+  if (result.error) throw result.error;
   if (result.status !== 0)
     throw new Error(`Contract generator failed with exit code ${result.status ?? 1}`);
 }

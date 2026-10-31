@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -16,6 +18,8 @@ import (
 	"github.com/openpost/backend/internal/api/middleware"
 	"github.com/openpost/backend/internal/models"
 	"github.com/openpost/backend/internal/services/adminagent"
+	"github.com/openpost/backend/internal/services/workspaceaccess"
+	"github.com/openpost/backend/internal/services/workflows"
 	"github.com/uptrace/bun"
 )
 
@@ -25,14 +29,35 @@ const (
 	adminAgentStreamTick     = 250 * time.Millisecond
 	adminAgentPollEvery      = 4
 	adminAgentHeartbeatEvery = 60
+	adminAgentAccountsLimit  = 100
 )
+
+type adminAgentAccount struct {
+	ID              string `json:"id"`
+	Slug            string `json:"slug"`
+	Alias           string `json:"alias,omitempty"`
+	Platform        string `json:"platform"`
+	AccountUsername string `json:"account_username"`
+	InstanceURL     string `json:"instance_url,omitempty"`
+}
+
+type adminAgentAccountsResponse struct {
+	WorkspaceID string              `json:"workspace_id"`
+	Accounts    []adminAgentAccount `json:"accounts"`
+	HasMore     bool                `json:"has_more"`
+}
 
 type AdminAgentHandler struct {
 	service        *adminagent.Service
 	db             *bun.DB
 	auth           middleware.Authenticator
 	callbackSecret string
+	workflows       *workflows.Service
+	publications    *PublicationHandler
 }
+
+func (h *AdminAgentHandler) SetWorkflowService(service *workflows.Service) { h.workflows = service }
+func (h *AdminAgentHandler) SetPublicationHandler(handler *PublicationHandler) { h.publications = handler }
 
 type AdminAgentConversationResponse struct {
 	ID          string                    `json:"id"`
@@ -155,6 +180,22 @@ func (h *AdminAgentHandler) RegisterEchoRoutes(e *echo.Echo) {
 	auth := middleware.BearerMiddleware(h.auth)
 	e.GET("/api/v1/admin/agent/runs/:run_id/events", h.streamEvents, auth)
 	e.GET("/api/v1/admin/agent/runs/:run_id/context", h.runContext)
+	e.POST("/api/v1/admin/agent/runs/:run_id/read-capability", h.issueReadCapability)
+	e.POST("/api/v1/admin/agent/runs/:run_id/workflow-write-capability", h.issueWorkflowWriteCapability)
+	e.POST("/api/v1/admin/agent/runs/:run_id/write/workflows", h.writeWorkflow)
+	e.PUT("/api/v1/admin/agent/runs/:run_id/write/workflows/:id", h.writeWorkflow)
+	e.POST("/api/v1/admin/agent/runs/:run_id/publication-write-capability", h.issuePublicationWriteCapability)
+	e.POST("/api/v1/admin/agent/runs/:run_id/write/publications", h.writePublication)
+	e.PUT("/api/v1/admin/agent/runs/:run_id/write/publications/:id", h.writePublication)
+	e.POST("/api/v1/admin/agent/runs/:run_id/write/publications/:id/schedule", h.scheduleAgentPublication)
+	e.POST("/api/v1/admin/agent/runs/:run_id/write/publications/:id/reschedule", h.scheduleAgentPublication)
+	e.POST("/api/v1/admin/agent/runs/:run_id/write/publications/:id/publish-now", h.publishAgentPublicationNow)
+	e.GET("/api/v1/admin/agent/runs/:run_id/read/accounts", h.readAccounts)
+	e.GET("/api/v1/admin/agent/runs/:run_id/read/posts", h.readPosts)
+	e.GET("/api/v1/admin/agent/runs/:run_id/read/schedules", h.readSchedules)
+	e.GET("/api/v1/admin/agent/runs/:run_id/read/analytics", h.readAnalytics)
+	e.GET("/api/v1/admin/agent/runs/:run_id/read/workflows", h.readWorkflows)
+	e.GET("/api/v1/admin/agent/runs/:run_id/read/workflow-runs", h.readWorkflowRuns)
 	e.POST("/api/v1/admin/agent/callback", h.callback)
 	e.POST("/api/v1/admin/agent/attachments", h.uploadAttachment, auth)
 	e.GET("/api/v1/admin/agent/attachments/:attachment_id", h.serveAttachment, auth)
@@ -165,8 +206,12 @@ func (h *AdminAgentHandler) engines(ctx context.Context, _ *struct{}) (*adminAge
 		return nil, err
 	}
 	defaultModel, options := h.service.Models(ctx)
+	engines, err := h.service.EnginesWithCredentials(ctx)
+	if err != nil {
+		return nil, huma.Error500InternalServerError("failed to read agent engine status")
+	}
 	out := &adminAgentEnginesOutput{}
-	out.Body.Engines = h.service.Engines()
+	out.Body.Engines = engines
 	out.Body.Models = append(make([]adminagent.ModelOption, 0, len(options)), options...)
 	out.Body.DefaultModel = defaultModel
 	return out, nil
@@ -196,7 +241,7 @@ func (h *AdminAgentHandler) createConversation(
 	if err != nil {
 		return nil, huma.Error400BadRequest("engine must be assistant, opencode, codex, or claude")
 	}
-	workspaceID := input.Body.WorkspaceID
+	workspaceID := strings.TrimSpace(input.Body.WorkspaceID)
 	if workspaceID != "" {
 		exists, err := h.db.NewSelect().Model((*models.Workspace)(nil)).
 			Where("id = ?", workspaceID).Exists(ctx)
@@ -205,6 +250,13 @@ func (h *AdminAgentHandler) createConversation(
 		}
 		if !exists {
 			return nil, huma.Error404NotFound("workspace not found")
+		}
+		allowed, err := workspaceReadAllowed(ctx, h.db, workspaceID, middleware.GetUserID(ctx))
+		if err != nil {
+			return nil, huma.Error500InternalServerError("failed to check workspace access")
+		}
+		if !allowed {
+			return nil, huma.Error403Forbidden("workspace not accessible")
 		}
 	}
 	conversation, err := h.service.CreateConversation(
@@ -269,6 +321,27 @@ func (h *AdminAgentHandler) startRun(
 	if err := requireBrowserSessionInstanceAdmin(ctx, h.db); err != nil {
 		return nil, err
 	}
+	var conversation adminagent.AgentConversation
+	if err := h.db.NewSelect().Model(&conversation).
+		Column("created_by_user_id", "workspace_id").
+		Where("id = ?", input.ConversationID).Scan(ctx); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, huma.Error404NotFound("conversation not found")
+		}
+		return nil, huma.Error500InternalServerError("failed to check conversation workspace")
+	}
+	if conversation.WorkspaceID != nil {
+		if conversation.CreatedByUserID != middleware.GetUserID(ctx) {
+			return nil, huma.Error403Forbidden("conversation owner required for workspace operations")
+		}
+		allowed, err := workspaceReadAllowed(ctx, h.db, *conversation.WorkspaceID, middleware.GetUserID(ctx))
+		if err != nil {
+			return nil, huma.Error500InternalServerError("failed to check workspace access")
+		}
+		if !allowed {
+			return nil, huma.Error403Forbidden("workspace not accessible")
+		}
+	}
 	run, err := h.service.StartRun(ctx, adminagent.StartRunInput{
 		ConversationID: input.ConversationID,
 		UserID:         middleware.GetUserID(ctx),
@@ -317,6 +390,8 @@ func (h *AdminAgentHandler) cancelRun(
 			return nil, huma.Error404NotFound("run not found")
 		case errors.Is(err, adminagent.ErrRunTerminal):
 			return nil, huma.Error409Conflict("run has already finished")
+		case errors.Is(err, adminagent.ErrGitHubRunIDPending):
+			return nil, huma.Error409Conflict("GitHub Actions has not reported its run ID yet; retry cancellation")
 		default:
 			return nil, huma.Error500InternalServerError("failed to cancel agent run")
 		}
@@ -371,6 +446,12 @@ func (h *AdminAgentHandler) streamEvents(c echo.Context) error {
 	ctx := c.Request().Context()
 	runID := c.Param("run_id")
 	after, _ := strconv.ParseInt(c.QueryParam("after"), 10, 64)
+	if lastID, err := strconv.ParseInt(c.Request().Header.Get("Last-Event-ID"), 10, 64); err == nil && lastID > after {
+		after = lastID
+	}
+	if after < 0 {
+		after = 0
+	}
 	run, err := h.service.GetRun(ctx, runID)
 	if err != nil {
 		if errors.Is(err, adminagent.ErrRunNotFound) {
@@ -389,18 +470,22 @@ func (h *AdminAgentHandler) streamEvents(c echo.Context) error {
 	header.Set("X-Accel-Buffering", "no")
 	c.Response().WriteHeader(http.StatusOK)
 
-	send := func(event string, value any) bool {
+	send := func(event string, value any, id int64) bool {
 		data, err := json.Marshal(value)
 		if err != nil {
 			return false
 		}
-		if _, err := fmt.Fprintf(c.Response().Writer, "event: %s\ndata: %s\n\n", event, data); err != nil {
+		frame := fmt.Sprintf("event: %s\ndata: %s\n\n", event, data)
+		if id > 0 {
+			frame = fmt.Sprintf("id: %d\n%s", id, frame)
+		}
+		if _, err := io.WriteString(c.Response().Writer, frame); err != nil {
 			return false
 		}
 		flusher.Flush()
 		return true
 	}
-	if !send("run", run) {
+	if !send("run", run, 0) {
 		return nil
 	}
 	h.forwardRunEvents(ctx, runID, run, after, send, func() bool {
@@ -421,7 +506,7 @@ func (h *AdminAgentHandler) forwardRunEvents(
 	runID string,
 	run *adminagent.AgentRun,
 	after int64,
-	send func(string, any) bool,
+	send func(string, any, int64) bool,
 	keepAlive func() bool,
 ) {
 	lastStatus := run.Status
@@ -438,7 +523,7 @@ func (h *AdminAgentHandler) forwardRunEvents(
 			// Flush anything the last poll missed, so the final answer always
 			// arrives before the stream ends.
 			_, _ = h.sendNewEvents(ctx, runID, &after, &lastStatus, send)
-			send("done", map[string]string{"status": run.Status})
+			send("done", map[string]string{"status": run.Status}, 0)
 			return
 		}
 		select {
@@ -459,7 +544,7 @@ func (h *AdminAgentHandler) forwardRunEvents(
 		}
 		if liveChanged {
 			lastVersion = version
-			if !send("live", map[string]string{"text": text}) {
+			if !send("live", map[string]string{"text": text}, 0) {
 				return
 			}
 		}
@@ -476,15 +561,15 @@ func (h *AdminAgentHandler) sendNewEvents(
 	runID string,
 	after *int64,
 	lastStatus *string,
-	send func(string, any) bool,
+	send func(string, any, int64) bool,
 ) (*adminagent.AgentRun, bool) {
 	events, err := h.service.Events(ctx, runID, *after)
 	if err != nil {
-		send("stream_error", map[string]string{"message": "progress unavailable"})
+		send("stream_error", map[string]string{"message": "progress unavailable"}, 0)
 		return nil, false
 	}
 	for _, event := range events {
-		if !send("event", event) {
+		if !send("event", event, event.Seq) {
 			return nil, false
 		}
 		*after = event.Seq
@@ -495,7 +580,7 @@ func (h *AdminAgentHandler) sendNewEvents(
 	}
 	if updated.Status != *lastStatus {
 		*lastStatus = updated.Status
-		if !send("run", updated) {
+		if !send("run", updated, 0) {
 			return nil, false
 		}
 	}
@@ -509,17 +594,130 @@ func (h *AdminAgentHandler) runContext(c echo.Context) error {
 	if err := adminagent.VerifyCallback(h.callbackSecret, timestamp, signature, []byte(runID), time.Now()); err != nil {
 		return c.JSON(http.StatusUnauthorized, map[string]string{fieldError: "invalid callback signature"})
 	}
-	run, err := h.service.GetRun(c.Request().Context(), runID)
+	context, err := h.service.GetRunContext(c.Request().Context(), runID)
 	if err != nil {
-		return c.JSON(http.StatusNotFound, map[string]string{fieldError: "run not found"})
+		if errors.Is(err, adminagent.ErrRunNotFound) {
+			return c.JSON(http.StatusNotFound, map[string]string{fieldError: "run not found"})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{fieldError: "run context unavailable"})
 	}
-	return c.JSON(http.StatusOK, map[string]string{
-		"run_id":          run.ID,
-		"conversation_id": run.ConversationID,
-		"engine":          run.Engine,
-		"prompt":          run.Prompt,
-		"base_revision":   run.BaseRevision,
-	})
+	return c.JSON(http.StatusOK, context)
+}
+
+// A trusted Actions step may issue a capability only after its exact run ID
+// has been registered through the signed callback transport.
+func (h *AdminAgentHandler) issueReadCapability(c echo.Context) error {
+	body, err := io.ReadAll(http.MaxBytesReader(c.Response(), c.Request().Body, 4096))
+	if err != nil {
+		return c.JSON(http.StatusRequestEntityTooLarge, map[string]string{fieldError: "read capability request too large"})
+	}
+	timestamp := c.Request().Header.Get(adminagent.CallbackTimestampHeader)
+	signature := c.Request().Header.Get(adminagent.CallbackSignatureHeader)
+	signed := append([]byte(http.MethodPost+" "+c.Request().URL.EscapedPath()+"\n"), body...)
+	if adminagent.VerifyCallback(h.callbackSecret, timestamp, signature, signed, time.Now()) != nil {
+		return c.JSON(http.StatusUnauthorized, map[string]string{fieldError: "invalid capability signature"})
+	}
+	var request struct {
+		GitHubRunID int64  `json:"github_run_id"`
+		Operation   string `json:"operation"`
+	}
+	if json.Unmarshal(body, &request) != nil || !adminagent.ReadOperationAllowed(request.Operation) || request.GitHubRunID <= 0 {
+		return c.JSON(http.StatusBadRequest, map[string]string{fieldError: "invalid capability request"})
+	}
+	run, workspaceID, err := h.readableRun(c.Request().Context(), c.Param("run_id"))
+	if err != nil {
+		return err
+	}
+	if run.GitHubRunID != request.GitHubRunID {
+		return c.JSON(http.StatusForbidden, map[string]string{fieldError: "GitHub Actions run identity mismatch"})
+	}
+	capability, err := adminagent.IssueReadCapability(h.callbackSecret, *run, workspaceID, request.Operation, time.Now())
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{fieldError: "capability unavailable"})
+	}
+	c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+	return c.JSON(http.StatusOK, map[string]string{"capability": capability})
+}
+
+// A capability is bound to one stored run, Actions identity, Workspace and
+// read operation. Membership is rechecked for every read, including replays.
+func (h *AdminAgentHandler) readAccounts(c echo.Context) error {
+	workspaceID, err := h.authorizeRead(c, "accounts")
+	if err != nil {
+		return err
+	}
+	ctx := c.Request().Context()
+	var accounts []models.SocialAccount
+	if err := h.db.NewSelect().Model(&accounts).
+		Column("id", "slug", "alias", "platform", "account_username", "instance_url").
+		Where("workspace_id = ? AND is_active = ?", workspaceID, true).
+		OrderExpr("created_at DESC, id DESC").Limit(adminAgentAccountsLimit + 1).Scan(ctx); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{fieldError: "accounts unavailable"})
+	}
+	response := adminAgentAccountsResponse{
+		WorkspaceID: workspaceID,
+		Accounts:    make([]adminAgentAccount, 0, min(len(accounts), adminAgentAccountsLimit)),
+		HasMore:     len(accounts) > adminAgentAccountsLimit,
+	}
+	for _, account := range accounts[:min(len(accounts), adminAgentAccountsLimit)] {
+		response.Accounts = append(response.Accounts, adminAgentAccount{
+			ID: account.ID, Slug: account.Slug, Alias: account.Alias, Platform: account.Platform,
+			AccountUsername: account.AccountUsername, InstanceURL: account.InstanceURL,
+		})
+	}
+	return c.JSON(http.StatusOK, response)
+}
+
+func (h *AdminAgentHandler) authorizeRead(c echo.Context, operation string) (string, error) {
+	authorization := c.Request().Header.Get(echo.HeaderAuthorization)
+	if !strings.HasPrefix(authorization, "Bearer ") || len(authorization) > 1100 {
+		return "", echo.NewHTTPError(http.StatusUnauthorized, "read capability required")
+	}
+	run, workspaceID, err := h.readableRun(c.Request().Context(), c.Param("run_id"))
+	if err != nil {
+		return "", err
+	}
+	if adminagent.VerifyReadCapability(h.callbackSecret, strings.TrimPrefix(authorization, "Bearer "),
+		*run, workspaceID, operation, time.Now()) != nil {
+		return "", echo.NewHTTPError(http.StatusUnauthorized, "invalid read capability")
+	}
+	c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+	return workspaceID, nil
+}
+
+func (h *AdminAgentHandler) readableRun(ctx context.Context, runID string) (*adminagent.AgentRun, string, error) {
+	run, err := h.service.GetRun(ctx, runID)
+	if err != nil {
+		if errors.Is(err, adminagent.ErrRunNotFound) {
+			return nil, "", echo.NewHTTPError(http.StatusNotFound, "run not found")
+		}
+		return nil, "", echo.NewHTTPError(http.StatusInternalServerError, "run unavailable")
+	}
+	if adminagent.RunStatus(run.Status).Terminal() {
+		return nil, "", echo.NewHTTPError(http.StatusConflict, "run is no longer active")
+	}
+	if run.GitHubRunID <= 0 {
+		return nil, "", echo.NewHTTPError(http.StatusConflict, "GitHub Actions run is not registered")
+	}
+	var conversation adminagent.AgentConversation
+	if err := h.db.NewSelect().Model(&conversation).
+		Column("created_by_user_id", "workspace_id").
+		Where("id = ?", run.ConversationID).Scan(ctx); err != nil {
+		return nil, "", echo.NewHTTPError(http.StatusInternalServerError, "conversation unavailable")
+	}
+	if conversation.WorkspaceID == nil || strings.TrimSpace(*conversation.WorkspaceID) == "" {
+		return nil, "", echo.NewHTTPError(http.StatusConflict, "conversation has no selected Workspace")
+	}
+	workspaceID := *conversation.WorkspaceID
+	decision, err := workspaceaccess.NewAuthorizer(h.db).Authorize(ctx, workspaceID,
+		workspaceaccess.ActorFacts{UserID: conversation.CreatedByUserID}, workspaceaccess.LevelRead)
+	if err != nil {
+		return nil, "", echo.NewHTTPError(http.StatusInternalServerError, "workspace access unavailable")
+	}
+	if !decision.Allowed {
+		return nil, "", echo.NewHTTPError(http.StatusForbidden, "workspace access denied")
+	}
+	return run, workspaceID, nil
 }
 
 func (h *AdminAgentHandler) callback(c echo.Context) error {

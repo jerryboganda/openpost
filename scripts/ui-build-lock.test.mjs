@@ -28,7 +28,11 @@ async function fixture(t) {
   const binaryDirectory = path.join(root, "bin");
   await mkdir(path.join(packageRoot, "scripts"), { recursive: true });
   await mkdir(binaryDirectory);
-  await symlink(await realpath(dependencies), path.join(root, "node_modules"), "dir");
+  await symlink(
+    await realpath(dependencies),
+    path.join(root, "node_modules"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
   await writeFile(path.join(root, "package.json"), '{"type":"module"}');
   await copyFile(buildEntry, path.join(packageRoot, "scripts/build.mjs"));
   await writeFile(
@@ -52,6 +56,12 @@ import { setTimeout as delay } from "node:timers/promises";
 `,
     { mode: 0o755 },
   );
+  if (process.platform === "win32") {
+    await writeFile(
+      path.join(binaryDirectory, "svelte-package.cmd"),
+      '@echo off\r\nnode "%~dp0svelte-package"\r\n',
+    );
+  }
   return { packageRoot, binaryDirectory };
 }
 

@@ -157,7 +157,7 @@ test("atomically mirrors the complete artifact and removes stale files", async (
   ];
   const files = (await readdir(destination, { recursive: true, withFileTypes: true }))
     .filter((entry) => entry.isFile())
-    .map((entry) => path.relative(destination, path.join(entry.parentPath, entry.name)))
+    .map((entry) => path.relative(destination, path.join(entry.parentPath, entry.name)).split(path.sep).join("/"))
     .sort();
   assert.deepEqual(files, paths);
   for (const file of paths) {
@@ -174,7 +174,10 @@ test("atomically mirrors the complete artifact and removes stale files", async (
     await readFile(path.join(destination, "assets/app.js"), "utf8"),
     "console.log('openpost');\n",
   );
-  assert.equal((await stat(path.join(destination, "assets/app.js"))).mode & 0o777, 0o755);
+  assert.equal(
+    (await stat(path.join(destination, "assets/app.js"))).mode & 0o777,
+    process.platform === "win32" ? 0o666 : 0o755,
+  );
   assert.deepEqual(await artifactManifest(destination), await artifactManifest(source));
   await assert.rejects(readFile(path.join(destination, "stale.js")), /ENOENT/);
   const [sourceModel, packagedModel] = await Promise.all([

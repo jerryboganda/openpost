@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "bun run prepare && next dev --hostname 0.0.0.0 --port 4174",
     "prepare": "bun ../../scripts/copy-docs-openapi.mjs && bun ../../scripts/sync-assets.mjs --surface docs && bun scripts/generate-api.ts && bun ../../scripts/generate-social-images.mjs --surface docs && fumadocs-mdx",
-    "build": "bun ../../scripts/check-public-telemetry-env.mjs && bun run prepare && next build && bun ../../scripts/generate-agent-surfaces.mjs --surface documentation && bun scripts/check-social-metadata-output.mjs",
+    "build": "bun ../../scripts/check-public-telemetry-env.mjs && bun run prepare && next build --webpack && bun ../../scripts/generate-agent-surfaces.mjs --surface documentation && bun scripts/check-social-metadata-output.mjs",
     "preview": "wrangler pages dev out --compatibility-date 2026-08-06 --port 4174",
     "check": "tsc --noEmit"
   },

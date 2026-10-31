@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { staticUICSS } from "./static-ui.mjs";
 import { offlineTranslations } from "../apps/web/src/lib/offline-translations.ts";
 
-const css = await staticUICSS();
+const css = (await staticUICSS()).replaceAll("\r\n", "\n");
 const mark = (await readFile(new URL("../assets/brand/icon.svg", import.meta.url), "utf8"))
   .replace(/<\?xml[^>]*>\s*/u, "")
   .replace(
@@ -57,7 +57,7 @@ const offline = `<!doctype html>
 `;
 
 for (const [relative, content] of [
-  ["apps/web/static/offline.html", offline],
+  ["apps/web/static/offline.html", offline.replaceAll("\r\n", "\n")],
   ["apps/server/internal/api/handlers/mcp_ui.css", css],
 ]) {
   const output = new URL(`../${relative}`, import.meta.url);

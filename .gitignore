@@ -126,6 +126,7 @@ apps/marketing/static/og/
 
 # Local agent scratch evidence (audit screenshots, PDFs, dumps); never shipped.
 /tmp/
+/.longrun/
 # Component-test review captures, including older explicit screenshot names.
 /apps/web/src/**/__screenshots__/
 /apps/web/src/lib/video-editor/components/acf001-*.png

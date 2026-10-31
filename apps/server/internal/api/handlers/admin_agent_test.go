@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +38,10 @@ func (d *agentTestDispatcher) Dispatch(_ context.Context, request adminagent.Dis
 func (d *agentTestDispatcher) Cancel(_ context.Context, run adminagent.AgentRun) error {
 	d.cancelled = append(d.cancelled, run.ID)
 	return nil
+}
+
+func (d *agentTestDispatcher) LookupRun(_ context.Context, _ adminagent.AgentRun) (adminagent.GitHubRunState, error) {
+	return adminagent.GitHubRunState{}, adminagent.ErrGitHubRunUnidentified
 }
 
 // agentTestChat answers every turn. A non-nil gate holds the answer until it
@@ -77,9 +83,9 @@ func newAdminAgentTestServerWithChat(
 		PasswordHash: "hash", IsAdmin: isAdmin, CreatedAt: time.Now().UTC(),
 	}).Exec(t.Context())
 	require.NoError(t, err)
-	for _, name := range []string{"176_admin_agent.sql", "177_admin_agent_chat.sql"} {
-		migration, err := os.ReadFile("../../database/migrations/" + name)
-		require.NoError(t, err)
+	for _, name := range []string{"176_admin_agent.sql", "177_admin_agent_chat.sql", "182_admin_agent_one_active_run.sql", "178_admin_agent_github_run_id.sql"} {
+		migration, readErr := os.ReadFile("../../database/migrations/" + name)
+		require.NoError(t, readErr)
 		_, err = db.Exec(string(migration))
 		require.NoError(t, err)
 	}
@@ -196,6 +202,15 @@ func TestAdminAgentAuthorizationAndConversationFlow(t *testing.T) {
 		}
 		decodeAgentBody(t, started, &startedBody)
 		require.Equal(t, "dispatched", startedBody.AgentRun.Status)
+	duplicate := requestAgent(t, e, http.MethodPost,
+		"/api/v1/admin/agent/conversations/"+createdBody.AgentConversation.ID+"/messages",
+		map[string]string{"prompt": "Start another run."})
+	require.Equal(t, http.StatusConflict, duplicate.Code, duplicate.Body.String())
+	require.Len(t, dispatcher.dispatched, 1)
+	pendingCancellation := requestAgent(t, e, http.MethodPost,
+		"/api/v1/admin/agent/runs/"+startedBody.AgentRun.ID+"/cancel", nil)
+	require.Equal(t, http.StatusConflict, pendingCancellation.Code)
+	require.Empty(t, dispatcher.cancelled)
 
 		view, err := service.GetConversation(t.Context(), conversationID)
 		require.NoError(t, err)
@@ -447,9 +462,10 @@ func TestAdminAgentCallbackAndStream(t *testing.T) {
 	require.NoError(t, err)
 
 	callback := map[string]any{
-		"run_id":  run.ID,
-		"status":  "succeeded",
-		"summary": "Opened a pull request and reported the checks.",
+		"run_id":        run.ID,
+		"github_run_id": int64(12345),
+		"status":        "succeeded",
+		"summary":       "Opened a pull request and reported the checks.",
 		"events": []map[string]string{
 			{"key": "phase-tests", "kind": "test", "message": "Backend tests passed"},
 		},
@@ -469,6 +485,7 @@ func TestAdminAgentCallbackAndStream(t *testing.T) {
 	stored, err := service.GetRun(t.Context(), run.ID)
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", stored.Status)
+	require.Equal(t, int64(12345), stored.GitHubRunID)
 	require.Equal(t, "Opened a pull request and reported the checks.", stored.Summary)
 
 	forged := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/admin/agent/callback", bytes.NewReader(body))
@@ -477,10 +494,122 @@ func TestAdminAgentCallbackAndStream(t *testing.T) {
 	forgedRecorder := httptest.NewRecorder()
 	e.ServeHTTP(forgedRecorder, forged)
 	require.Equal(t, http.StatusUnauthorized, forgedRecorder.Code)
+	tamperedBody := bytes.Replace(body, []byte(`"github_run_id":12345`), []byte(`"github_run_id":54321`), 1)
+	require.NotEqual(t, body, tamperedBody)
+	tampered := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/admin/agent/callback", bytes.NewReader(tamperedBody))
+	tampered.Header.Set(adminagent.CallbackTimestampHeader, timestamp)
+	tampered.Header.Set(adminagent.CallbackSignatureHeader, signature)
+	tamperedRecorder := httptest.NewRecorder()
+	e.ServeHTTP(tamperedRecorder, tampered)
+	require.Equal(t, http.StatusUnauthorized, tamperedRecorder.Code)
 
 	stream := requestAgent(t, e, http.MethodGet, "/api/v1/admin/agent/runs/"+run.ID+"/events", nil)
 	require.Equal(t, http.StatusOK, stream.Code)
 	require.Contains(t, stream.Body.String(), "event: run")
 	require.Contains(t, stream.Body.String(), "event: done")
 	require.Contains(t, stream.Body.String(), `"status":"succeeded"`)
+
+	events, err := service.Events(t.Context(), run.ID, 0)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(events), 2)
+	previous := -1
+	for _, event := range events {
+		frame := "id: " + strconv.FormatInt(event.Seq, 10) + "\nevent: event\n"
+		index := strings.Index(stream.Body.String(), frame)
+		require.Greater(t, index, previous, "persisted events must precede done in sequence order")
+		previous = index
+	}
+	require.Greater(t, strings.Index(stream.Body.String(), "event: done\n"), previous)
+
+	resume := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
+		"/api/v1/admin/agent/runs/"+run.ID+"/events?after=0", nil)
+	resume.Header.Set("Authorization", "Bearer web-token")
+	resume.Header.Set("Last-Event-ID", strconv.FormatInt(events[0].Seq, 10))
+	resumed := httptest.NewRecorder()
+	e.ServeHTTP(resumed, resume)
+	require.Equal(t, http.StatusOK, resumed.Code)
+	require.NotContains(t, resumed.Body.String(), "id: "+strconv.FormatInt(events[0].Seq, 10)+"\n")
+	require.Contains(t, resumed.Body.String(), "id: "+strconv.FormatInt(events[1].Seq, 10)+"\n")
+	require.Contains(t, resumed.Body.String(), "event: done")
 }
+
+func TestAdminAgentSignedAccountReadUsesConversationWorkspace(t *testing.T) {
+	ctx := t.Context()
+	db := createHandlerTestDB(t, (*models.User)(nil), (*models.Workspace)(nil), (*models.WorkspaceMember)(nil), (*models.SocialAccount)(nil))
+	_, err := db.NewInsert().Model(&models.User{ID: "user-1", Email: "admin@example.com", IsAdmin: true}).Exec(ctx)
+	require.NoError(t, err)
+	for _, ws := range []string{"ws-1", "ws-2"} {
+		_, err = db.NewInsert().Model(&models.Workspace{ID: ws, Name: ws}).Exec(ctx)
+		require.NoError(t, err)
+	}
+	_, err = db.NewInsert().Model(&models.WorkspaceMember{WorkspaceID: "ws-1", UserID: "user-1", Role: models.WorkspaceRoleViewer}).Exec(ctx)
+	require.NoError(t, err)
+	for _, acc := range []models.SocialAccount{
+		{ID: "allowed", WorkspaceID: "ws-1", Slug: "allowed", Platform: "bluesky", AccountUsername: "selected", IsActive: true},
+		{ID: "inactive", WorkspaceID: "ws-1", Slug: "inactive", Platform: "x", IsActive: false},
+		{ID: "other", WorkspaceID: "ws-2", Slug: "other", Platform: "x", IsActive: true},
+	} {
+		_, err = db.NewInsert().Model(&acc).Exec(ctx)
+		require.NoError(t, err)
+	}
+	for _, migration := range []string{"176_admin_agent.sql", "177_admin_agent_chat.sql", "182_admin_agent_one_active_run.sql", "178_admin_agent_github_run_id.sql"} {
+		data, readErr := os.ReadFile("../../database/migrations/" + migration)
+		require.NoError(t, readErr)
+		_, err = db.Exec(string(data))
+		require.NoError(t, err)
+	}
+	service := adminagent.NewService(db, &agentTestDispatcher{})
+	conversation, err := service.CreateConversation(ctx, "user-1", "ws-1", "", adminagent.EngineCodex)
+	require.NoError(t, err)
+	run, err := service.StartRun(ctx, adminagent.StartRunInput{ConversationID: conversation.ID, UserID: "user-1", Prompt: "List accounts"})
+	require.NoError(t, err)
+	handler := NewAdminAgentHandler(service, db, browserSessionTestAuthenticator(), "callback-secret")
+	e := echo.New()
+	handler.RegisterEchoRoutes(e)
+	path := "/api/v1/admin/agent/runs/" + run.ID + "/read/accounts"
+	read := func(path, capability string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(ctx, http.MethodGet, path, nil)
+		if capability != "" {
+			req.Header.Set("Authorization", "Bearer "+capability)
+		}
+		response := httptest.NewRecorder()
+		e.ServeHTTP(response, req)
+		return response
+	}
+	issue := func(githubRunID int64) *httptest.ResponseRecorder {
+		body, marshalErr := json.Marshal(map[string]any{"github_run_id": githubRunID, "operation": "accounts"})
+		require.NoError(t, marshalErr)
+		path := "/api/v1/admin/agent/runs/" + run.ID + "/read-capability"
+		timestamp := time.Now().UTC().Format(time.RFC3339)
+		req := httptest.NewRequestWithContext(ctx, http.MethodPost, path, bytes.NewReader(body))
+		req.Header.Set(adminagent.CallbackTimestampHeader, timestamp)
+		signature := adminagent.SignCallback("callback-secret", timestamp, append([]byte("POST "+path+"\n"), body...))
+		req.Header.Set(adminagent.CallbackSignatureHeader, signature)
+		response := httptest.NewRecorder()
+		e.ServeHTTP(response, req)
+		return response
+	}
+	require.Equal(t, http.StatusUnauthorized, read(path, "").Code)
+	require.Equal(t, http.StatusConflict, issue(12345).Code)
+	registered, err := service.ApplyCallback(ctx, adminagent.AgentCallback{RunID: run.ID, GitHubRunID: ptrInt64(12345), Status: "running"})
+	require.NoError(t, err)
+	require.Equal(t, int64(12345), registered.GitHubRunID)
+	require.Equal(t, http.StatusForbidden, issue(54321).Code)
+	issued := issue(12345)
+	require.Equal(t, http.StatusOK, issued.Code, issued.Body.String())
+	var result struct { Capability string `json:"capability"` }
+	require.NoError(t, json.Unmarshal(issued.Body.Bytes(), &result))
+	require.NotEmpty(t, result.Capability)
+	require.Equal(t, http.StatusUnauthorized, read(path, "invalid").Code)
+	require.NotEqual(t, http.StatusOK, read("/api/v1/admin/agent/runs/another/read/accounts", result.Capability).Code)
+	response := read(path, result.Capability)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.Contains(t, response.Body.String(), `"id":"allowed"`)
+	require.NotContains(t, response.Body.String(), `"id":"other"`)
+	require.NotContains(t, response.Body.String(), `"id":"inactive"`)
+	_, err = db.NewDelete().Model((*models.WorkspaceMember)(nil)).Where("workspace_id = ?", "ws-1").Exec(ctx)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusForbidden, read(path, result.Capability).Code)
+}
+
+func ptrInt64(value int64) *int64 { return &value }

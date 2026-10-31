@@ -109,6 +109,7 @@ function compactHeaderPatterns(pathnames, maximumPatterns) {
 }
 
 export function renderOriginVaryHeaders(baseHeaders, pages) {
+  baseHeaders = baseHeaders.replace(/\r\n/gu, "\n");
   const [operatorHeaders] = baseHeaders.split(`\n${generatedVaryHeaderMarker}\n`, 1);
   const canonicalPaths = [...new Set(pages.map((page) => new URL(page.canonical).pathname))].sort(
     (left, right) => (left < right ? -1 : left > right ? 1 : 0),

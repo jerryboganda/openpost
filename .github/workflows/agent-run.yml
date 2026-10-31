@@ -1,8 +1,5 @@
 name: OpenPost Agent Run
 
-# Executes one administrator-requested coding task with the selected engine.
-# The prompt is fetched from OpenPost over a signed request, so it never appears
-# in workflow dispatch inputs or public run metadata.
 on:
   workflow_dispatch:
     inputs:
@@ -11,19 +8,18 @@ on:
         required: true
         type: string
       callback_url:
-        description: Signed progress callback URL
+        description: Callback endpoint
         required: true
         type: string
       context_url:
-        description: Signed run context URL
+        description: Run context endpoint
         required: true
         type: string
 
 run-name: openpost-agent-${{ inputs.run_id }}
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: openpost-agent-${{ inputs.run_id }}
@@ -32,39 +28,80 @@ concurrency:
 env:
   OPENPOST_AGENT_RUN_ID: ${{ inputs.run_id }}
   OPENPOST_AGENT_CALLBACK_URL: ${{ inputs.callback_url }}
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_LINUX_X64_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
 
 jobs:
-  agent:
-    name: Run the selected engine
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      OPENPOST_AGENT_CALLBACK_SECRET: ${{ secrets.OPENPOST_AGENT_CALLBACK_SECRET }}
+    timeout-minutes: 10
+    outputs:
+      engine: ${{ steps.context.outputs.engine }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.19.0"
+      - name: Register the exact Actions run
+        env:
+          OPENPOST_AGENT_CALLBACK_SECRET: ${{ secrets.OPENPOST_AGENT_CALLBACK_SECRET }}
+        run: node scripts/agent-callback.mjs --status running --event "phase-registered|progress|GitHub Actions run registered."
+      - name: Fetch context and issue read capability
+        id: context
+        env:
+          OPENPOST_AGENT_CALLBACK_SECRET: ${{ secrets.OPENPOST_AGENT_CALLBACK_SECRET }}
+        run: |
+          node scripts/agent-context.mjs --url "${{ inputs.context_url }}" --run-id "$OPENPOST_AGENT_RUN_ID" --output "$RUNNER_TEMP/context.json"
+          mkdir -p "$RUNNER_TEMP/read-capabilities"
+          for operation in accounts posts schedules analytics workflows workflow-runs; do
+            node scripts/agent-read-capability.mjs --operation "$operation" --output "$RUNNER_TEMP/read-capabilities/$operation"
+          done
+          mkdir -p "$RUNNER_TEMP/write-capabilities"
+          for operation in workflow-create workflow-update publication-create publication-update publication-schedule publication-reschedule publication-publish-now; do
+            node scripts/agent-read-capability.mjs --operation "$operation" --output "$RUNNER_TEMP/write-capabilities/$operation" || true
+          done
+          echo "engine=$(jq -r .engine "$RUNNER_TEMP/context.json")" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: agent-input
+          path: |
+            ${{ runner.temp }}/context.json
+            ${{ runner.temp }}/read-capabilities/
+            ${{ runner.temp }}/write-capabilities/
+          retention-days: 1
+
+  engine:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    outputs:
+      exit_code: ${{ steps.execute.outputs.exit_code }}
+      packaged: ${{ steps.pack.outputs.packaged }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.19.0"
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          go-version-file: apps/server/go.mod
-          cache-dependency-path: apps/server/go.sum
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: "1.3.11"
-
-      - name: Fetch the run context
-        id: context
+          name: agent-input
+          path: ${{ runner.temp }}/agent-input
+      - name: Pin the proposal policy and secret scanner before the engine starts
         run: |
-          node scripts/agent-context.mjs \
-            --url "${{ inputs.context_url }}" \
-            --run-id "${{ inputs.run_id }}" \
-            --output "$RUNNER_TEMP/agent-context.json"
-          engine="$(jq -r .engine "$RUNNER_TEMP/agent-context.json")"
-          echo "engine=$engine" >> "$GITHUB_OUTPUT"
-
+          cp scripts/agent-proposal.py "$RUNNER_TEMP/agent-proposal.py"
+          cp .gitleaks.toml "$RUNNER_TEMP/agent-gitleaks.toml"
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          curl --fail --location --silent --show-error \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            --output "$archive"
+          printf '%s  %s\n' "$GITLEAKS_LINUX_X64_SHA256" "$archive" | sha256sum --check --status
+          tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
+          chmod +x "$RUNNER_TEMP/gitleaks"
       - name: Check engine credentials
         id: credentials
         env:
@@ -72,128 +109,176 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          engine="${{ steps.context.outputs.engine }}"
-          available=true
-          failure_code=""
-          failure_message=""
+          engine="${{ needs.prepare.outputs.engine }}"
           case "$engine" in
-            opencode)
-              [ -z "${OPENCODE_API_KEY}${OPENAI_API_KEY}${ANTHROPIC_API_KEY}" ] && { available=false; failure_code=missing_credentials; failure_message="The opencode engine is missing OPENCODE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY in GitHub Actions secrets."; }
-              ;;
-            codex)
-              [ -z "${OPENAI_API_KEY}" ] && { available=false; failure_code=missing_credentials; failure_message="The codex engine is missing OPENAI_API_KEY in GitHub Actions secrets."; }
-              ;;
-            claude)
-              [ -z "${ANTHROPIC_API_KEY}" ] && { available=false; failure_code=missing_credentials; failure_message="The claude engine is missing ANTHROPIC_API_KEY in GitHub Actions secrets."; }
-              ;;
-            *)
-              available=false
-              failure_code=unsupported_engine
-              failure_message="The requested engine is not supported."
-              ;;
+            opencode) test -n "${OPENCODE_API_KEY}${OPENAI_API_KEY}${ANTHROPIC_API_KEY}" ;;
+            codex) test -n "$OPENAI_API_KEY" ;;
+            claude) test -n "$ANTHROPIC_API_KEY" ;;
+            *) exit 1 ;;
           esac
-          if [ "$available" = "false" ]; then
-            node scripts/agent-callback.mjs --status failed \
-              --failure-code "$failure_code" \
-              --failure-message "$failure_message"
-          fi
-          echo "available=$available" >> "$GITHUB_OUTPUT"
-
-      - name: Announce the run
-        if: steps.credentials.outputs.available == 'true'
+      - name: Install engine
         run: |
-          node scripts/agent-callback.mjs --status running \
-            --event "phase-start|progress|Engine ${{ steps.context.outputs.engine }} started in GitHub Actions."
-
-      - name: Install the engine
-        if: steps.credentials.outputs.available == 'true'
-        run: |
-          case "${{ steps.context.outputs.engine }}" in
+          case "${{ needs.prepare.outputs.engine }}" in
             opencode) npm install --global opencode-ai ;;
             codex) npm install --global @openai/codex ;;
             claude) npm install --global @anthropic-ai/claude-code ;;
           esac
-
-      - name: Build the OpenPost CLI
-        if: steps.credentials.outputs.available == 'true'
-        run: |
-          (cd apps/cli && go build -o /usr/local/bin/openpost ./cmd/openpost)
-          openpost version || true
-
-      - name: Run the engine
-        id: engine
-        if: steps.credentials.outputs.available == 'true'
+      - name: Run the engine without administrative credentials
+        id: execute
         continue-on-error: true
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENPOST_TOKEN: ${{ secrets.OPENPOST_AGENT_API_TOKEN }}
-          OPENPOST_INSTANCE: ${{ vars.OPENPOST_PUBLIC_URL }}
-          OPENPOST_WORKSPACE: ${{ vars.OPENPOST_AGENT_WORKSPACE }}
+          OPENPOST_AGENT_READ_CAPABILITY_DIR: ${{ runner.temp }}/agent-input/read-capabilities
+          OPENPOST_AGENT_WRITE_CAPABILITY_DIR: ${{ runner.temp }}/agent-input/write-capabilities
+          OPENPOST_AGENT_ACTION_FILE: ${{ runner.temp }}/agent-actions.txt
         run: |
-          prompt="$(jq -r .prompt "$RUNNER_TEMP/agent-context.json")"
-          preamble="You are the OpenPost administrator agent running in a GitHub Actions checkout. Follow the administrator's task. Never print, commit, or push secrets or .env files. Use the openpost CLI (OPENPOST_INSTANCE and OPENPOST_TOKEN are set) for accounts, posts, schedules, and workflows when the task needs them; report provider or permission limits truthfully. Leave changes uncommitted so the workflow can open a branch and pull request."
-          task="${preamble}"$'\n\n'"${prompt}"
+          set -o pipefail
+          prompt="$(jq -r .prompt "$RUNNER_TEMP/agent-input/context.json")"
+          history="$(jq -c '{workspace_id, history}' "$RUNNER_TEMP/agent-input/context.json")"
+          preamble="You are the OpenPost administrator coding agent. Follow the latest task using earlier conversation as context. Authorized stored-state reads: node scripts/agent-read.mjs accounts; node scripts/agent-read.mjs posts [cursor]; node scripts/agent-read.mjs schedules [cursor] (UTC slot times); node scripts/agent-read.mjs analytics [cursor] (stored measurements and availability); node scripts/agent-read.mjs workflows [cursor] (structure-only definitions); node scripts/agent-read.mjs workflow-runs [cursor] (execution summaries). Workflow drafts may be created or edited ONLY when the latest administrator task explicitly requests that operation: node scripts/agent-workflow-write.mjs create definition.json - stable-key or node scripts/agent-workflow-write.mjs update definition.json workflow-id stable-key. Publication drafts may be created or edited ONLY when explicitly requested: node scripts/agent-publication-write.mjs create draft.json - stable-key or node scripts/agent-publication-write.mjs update draft.json publication-id stable-key. Drafts only: canonical text and account destinations, no schedule, media, segments or advanced settings. ONLY if the latest task explicitly requests future scheduling: node scripts/agent-publication-write.mjs schedule schedule.json publication-id stable-key; reschedule on the same run's previously scheduled publication: node scripts/agent-publication-write.mjs reschedule schedule.json publication-id stable-key. Scheduling input has only expected_revision and future RFC3339 scheduled_at; native provider readiness, account authorization and durable scheduling may reject it. A missing write capability means the operation was not authorized. ONLY when the latest task explicitly requests publishing or sending now: node scripts/agent-publication-write.mjs publish-now publish.json publication-id stable-key, where publish.json contains only expected_revision. This queues an existing unscheduled text-only draft after canonical all-destination provider scope, readiness, and review preflight. It returns a durable job ID and current job/publication statuses; queued does not mean published. Reuse the same key on uncertain retries. No cancellation, deletion, or direct provider mutations. Each operation is bound to the current run and conversation Workspace. Results are bounded. No provider sync or provider credentials are available. Do not print or commit secrets; leave changes for review."
+          task="${preamble}"$'\n\n'"Earlier conversation (JSON):"$'\n'"${history}"$'\n\n'"Latest task:"$'\n'"${prompt}"
           status=0
-          case "${{ steps.context.outputs.engine }}" in
-            opencode) timeout 2700 opencode run "$task" || status=$? ;;
-            codex) timeout 2700 codex exec --full-auto "$task" || status=$? ;;
-            claude) timeout 2700 claude -p "$task" --permission-mode acceptEdits --output-format text || status=$? ;;
+          case "${{ needs.prepare.outputs.engine }}" in
+            opencode) timeout 2700 opencode run --format json "$task" | node scripts/agent-action-stream.mjs opencode || status=$? ;;
+            codex) timeout 2700 codex exec --full-auto --json "$task" | node scripts/agent-action-stream.mjs codex || status=$? ;;
+            claude) timeout 2700 claude -p "$task" --permission-mode acceptEdits --verbose --output-format stream-json | node scripts/agent-action-stream.mjs claude || status=$? ;;
           esac
-          echo "exit_code=${status}" >> "$GITHUB_OUTPUT"
-          exit "${status}"
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+      - name: Pack proposed source changes
+        id: pack
+        if: always()
+        run: |
+          python3 "$RUNNER_TEMP/agent-proposal.py" pack "$RUNNER_TEMP/agent-output" "$RUNNER_TEMP/gitleaks" "$RUNNER_TEMP/agent-gitleaks.toml"
+          echo "packaged=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.pack.outcome == 'success'
+        with:
+          name: agent-output
+          path: |
+            ${{ runner.temp }}/agent-output/proposal.patch
+            ${{ runner.temp }}/agent-output/new-files.tar
+            ${{ runner.temp }}/agent-output/agent-actions.txt
+          retention-days: 1
+          if-no-files-found: error
 
+  verify:
+    needs: [prepare, engine]
+    if: needs.engine.result == 'success' && needs.engine.outputs.exit_code == '0' && needs.engine.outputs.packaged == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.11"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: agent-output
+          path: ${{ runner.temp }}/agent-output
+      - name: Install the trusted proposal scanner
+        run: |
+          cp scripts/agent-proposal.py "$RUNNER_TEMP/agent-proposal.py"
+          cp .gitleaks.toml "$RUNNER_TEMP/agent-gitleaks.toml"
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          curl --fail --location --silent --show-error \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            --output "$archive"
+          printf '%s  %s\n' "$GITLEAKS_LINUX_X64_SHA256" "$archive" | sha256sum --check --status
+          tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
+          chmod +x "$RUNNER_TEMP/gitleaks"
+      - name: Check the proposed changes
+        run: |
+          python3 "$RUNNER_TEMP/agent-proposal.py" apply "$RUNNER_TEMP/agent-output" "$RUNNER_TEMP/proposal-paths"
+          python3 "$RUNNER_TEMP/agent-proposal.py" scan "$RUNNER_TEMP/agent-output" "$RUNNER_TEMP/gitleaks" "$RUNNER_TEMP/agent-gitleaks.toml"
+          if [ -s "$RUNNER_TEMP/proposal-paths" ]; then
+            bun install --frozen-lockfile
+            bun run check
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verified-proposal
+          path: |
+            ${{ runner.temp }}/agent-output/proposal.patch
+            ${{ runner.temp }}/agent-output/new-files.tar
+          retention-days: 1
+
+  publish:
+    needs: [prepare, engine, verify]
+    if: needs.verify.result == 'success'
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      url: ${{ steps.publish.outputs.url }}
+      changed: ${{ steps.publish.outputs.changed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: verified-proposal
+          path: ${{ runner.temp }}/verified-proposal
       - name: Publish a reviewable branch
         id: publish
-        if: steps.credentials.outputs.available == 'true' && steps.engine.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          python3 scripts/agent-proposal.py apply "$RUNNER_TEMP/verified-proposal" "$RUNNER_TEMP/proposal-paths"
           changed=false
           url=""
-          if git status --porcelain --untracked-files=all | grep -Eq '(^|/)\.env(\.local|\.production|\.development)?$'; then
-            node scripts/agent-callback.mjs --status failed \
-              --failure-code secret_detected \
-              --failure-message "The engine produced an .env file; the change was not committed."
-            exit 1
+          if [ -s "$RUNNER_TEMP/proposal-paths" ]; then
+            git -c core.hooksPath=/dev/null add -A --pathspec-from-file="$RUNNER_TEMP/proposal-paths" --pathspec-file-nul
           fi
-          if [ -n "$(git status --porcelain)" ]; then
+          if ! git diff --cached --quiet; then
             branch="agent/${OPENPOST_AGENT_RUN_ID}"
-            git config user.name "openpost-agent"
-            git config user.email "openpost-agent@users.noreply.github.com"
-            git checkout -b "$branch"
-            git add -A
-            git commit -m "agent: automated change for run ${OPENPOST_AGENT_RUN_ID}"
-            git push origin "$branch"
-            url="$(gh pr create \
-              --base main \
-              --head "$branch" \
-              --title "agent: automated change for run ${OPENPOST_AGENT_RUN_ID}" \
-              --body "Automated change requested through the OpenPost administrator agent. Run: ${OPENPOST_AGENT_RUN_ID}. Repository checks run on this pull request; review the diff before merging.")"
+            git -c core.hooksPath=/dev/null switch -c "$branch"
+            git -c core.hooksPath=/dev/null -c user.name=openpost-agent -c user.email=openpost-agent@users.noreply.github.com commit -m "agent: automated change for run ${OPENPOST_AGENT_RUN_ID}"
+            git -c core.hooksPath=/dev/null -c credential.helper= -c http.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" push origin "$branch"
+            url="$(gh pr create --base main --head "$branch" --title "agent: automated change for run ${OPENPOST_AGENT_RUN_ID}" --body "Automated change requested through the OpenPost administrator agent. Review before merging.")"
             changed=true
           fi
-          {
-            echo "changed=$changed"
-            echo "url=${url}"
-          } >> "$GITHUB_OUTPUT"
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
 
-      - name: Report the result
-        if: always() && steps.credentials.outputs.available == 'true'
+  report:
+    needs: [prepare, engine, verify, publish]
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.19.0"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.engine.outputs.packaged == 'true'
+        with:
+          name: agent-output
+          path: ${{ runner.temp }}/agent-output
+      - name: Report verified engine outcome
+        env:
+          OPENPOST_AGENT_CALLBACK_SECRET: ${{ secrets.OPENPOST_AGENT_CALLBACK_SECRET }}
         run: |
-          if [ "${{ steps.engine.outcome }}" = "success" ] && [ "${{ steps.publish.outcome }}" != "failure" ]; then
-            if [ "${{ steps.publish.outputs.changed }}" = "true" ]; then
-              summary="Engine completed and opened a pull request: ${{ steps.publish.outputs.url }}. Repository checks run on that pull request."
-            else
-              summary="Engine completed without code changes."
-            fi
-            node scripts/agent-callback.mjs --status succeeded \
-              --summary "$summary" \
-              --branch "agent/${OPENPOST_AGENT_RUN_ID}" \
-              --event "phase-complete|result|${summary}"
+          if [ "${{ needs.engine.outputs.packaged }}" != true ]; then
+            node scripts/agent-callback.mjs --status failed --failure-code proposal_rejected --failure-message "The proposed changes could not be validated or scanned before upload. See the GitHub Actions run."
+          elif [ "${{ needs.engine.outputs.exit_code }}" != 0 ]; then
+            node scripts/agent-callback.mjs --status failed --failure-code engine_failed --failure-message "The coding engine could not complete. See the GitHub Actions run." --action-file "$RUNNER_TEMP/agent-output/agent-actions.txt"
+          elif [ "${{ needs.publish.result }}" = success ]; then
+            node scripts/agent-callback.mjs --status succeeded --summary "Engine finished and repository checks passed. Pull request: ${{ needs.publish.outputs.url }}" --event "phase-complete|result|Engine completed and proposed changes passed checks." --action-file "$RUNNER_TEMP/agent-output/agent-actions.txt"
+          elif [ "${{ needs.verify.result }}" = failure ] || [ "${{ needs.publish.result }}" = failure ]; then
+            node scripts/agent-callback.mjs --status failed --failure-code check_failed --failure-message "Repository checks or publication failed. See the GitHub Actions run." --action-file "$RUNNER_TEMP/agent-output/agent-actions.txt"
           else
-            code="${{ steps.engine.outputs.exit_code }}"
-            node scripts/agent-callback.mjs --status failed \
-              --failure-code engine_failed \
-              --failure-message "The engine exited with code ${code:-unknown}. See the GitHub Actions run for details."
+            node scripts/agent-callback.mjs --status failed --failure-code engine_failed --failure-message "The coding engine could not complete. See the GitHub Actions run." --action-file "$RUNNER_TEMP/agent-output/agent-actions.txt"
           fi

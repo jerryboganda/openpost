@@ -2,3 +2,22 @@ apps/web/static/image-editor-models/[0-9a-f]* binary
 apps/web/static/image-editor-models/*.json text diff merge
 patches/** -whitespace
 apps/mobile/patches/** -whitespace
+
+# Generated files are compared byte-for-byte; keep checkout newlines stable.
+apps/web/openapi.json text eol=lf
+apps/docs/content/docs/guides/media-limits.mdx text eol=lf
+packages/api-contract/src/schema.d.ts text eol=lf
+docs/reference/cli.md text eol=lf
+packages/n8n-nodes-openpost/generated/selectedContract.ts text eol=lf
+packages/n8n-nodes-openpost/nodes/OpenPost/v1/actions/generated/requestMappers.ts text eol=lf
+packages/n8n-nodes-openpost/nodes/OpenPost/v1/descriptions/generated/descriptions.ts text eol=lf
+packages/n8n-nodes-openpost/docs/selected-contract-report.md text eol=lf
+apps/marketing/static/404.html text eol=lf
+packages/ui/src/lib/themes/icons/packs/*.generated.ts text eol=lf
+apps/mobile/src/theme/icon-packs/*.generated.ts text eol=lf
+apps/mobile/src/theme/native-tab-icon-sources.generated.ts text eol=lf
+apps/server/internal/services/billing/catalog_generated.go text eol=lf
+packages/social-images/src/docs-catalog.js text eol=lf
+apps/web/static/offline.html text eol=lf
+apps/server/internal/api/handlers/mcp_ui.css text eol=lf
+apps/server/internal/legalpolicy/manifest_generated.go text eol=lf

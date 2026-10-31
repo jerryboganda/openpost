@@ -29,7 +29,7 @@ const headers = await readFile(path.join(outputRoot, '_headers'), 'utf8');
 assert.match(headers, /<\/\.well-known\/api-catalog>; rel="api-catalog"/);
 assert.match(headers, /<\/auth\.md>; rel="describedby"; type="text\/markdown"/);
 assert.doesNotMatch(headers, /rel="sitemap"/);
-const headerLines = headers.split('\n');
+const headerLines = headers.split(/\r?\n/);
 const apiCatalogRuleIndex = headerLines.indexOf('/.well-known/api-catalog');
 assert.equal(
 	headerLines[apiCatalogRuleIndex + 1]?.trim(),

@@ -43,7 +43,7 @@ export async function validateCompiledWorkerRunes(workerDirectory) {
     const filePath = path.join(entry.parentPath, entry.name);
     const contents = await readFile(filePath, "utf8");
     if (uncompiledRuneCall.test(contents)) {
-      invalidFiles.push(path.relative(workerDirectory, filePath));
+      invalidFiles.push(path.relative(workerDirectory, filePath).split(path.sep).join("/"));
     }
   }
   if (invalidFiles.length > 0) {

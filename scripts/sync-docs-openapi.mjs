@@ -6,12 +6,16 @@ import { spawnSync } from "node:child_process";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(scriptDir, "..");
 const source = path.join(root, "apps/web", "openapi.json");
+const bun = process.versions.bun ? process.execPath : "bun";
 
 const openapi = spawnSync("go", ["run", "./cmd/openpost-openapi"], {
   cwd: path.join(root, "apps/server"),
   encoding: "utf8",
   maxBuffer: 20 * 1024 * 1024,
 });
+if (openapi.error) {
+  throw openapi.error;
+}
 if (openapi.status !== 0) {
   if (openapi.stderr) {
     process.stderr.write(openapi.stderr);
@@ -21,8 +25,8 @@ if (openapi.status !== 0) {
 await mkdir(path.dirname(source), { recursive: true });
 await writeFile(source, formatJSON(JSON.parse(openapi.stdout)) + "\n");
 const formatter = spawnSync(
-  "bunx",
-  ["oxfmt", "--config", "apps/web/.oxfmtrc.json", "--write", "apps/web/openapi.json"],
+  bun,
+  ["x", "oxfmt", "--config", "apps/web/.oxfmtrc.json", "--write", "apps/web/openapi.json"],
   {
     cwd: root,
     stdio: "inherit",
@@ -56,8 +60,8 @@ await writeFile(
   mediaLimits.stdout,
 );
 const mediaFormatter = spawnSync(
-  "bunx",
-  ["oxfmt", "--write", "apps/docs/content/docs/guides/media-limits.mdx"],
+  bun,
+  ["x", "oxfmt", "--write", "apps/docs/content/docs/guides/media-limits.mdx"],
   { cwd: root, stdio: "inherit" },
 );
 if (mediaFormatter.status !== 0) throw new Error("Failed to format media limits");
@@ -70,7 +74,7 @@ const result = spawnSync("go", ["run", "./cmd/openpost-docs", cliDocs], {
 if (result.status !== 0) {
   throw new Error(`Failed to generate CLI reference docs with exit code ${result.status}`);
 }
-const cliFormatter = spawnSync("bunx", ["oxfmt", "--write", "docs/reference/cli.md"], {
+const cliFormatter = spawnSync(bun, ["x", "oxfmt", "--write", "docs/reference/cli.md"], {
   cwd: root,
   stdio: "inherit",
 });

@@ -56,6 +56,9 @@
       "vite": false,
     },
     "apps/mobile": {
+      // Mobile installs separately; static reachability uses its source alias without executing Metro.
+      "paths": { "@/*": ["src/*"] },
+      "metro": { "config": [] },
       "entry": ["src/app/**/*.{ts,tsx}!"],
       "project": ["src/**/*.{ts,tsx}!", "!src/**/*.{test,spec}.{ts,tsx}!"],
     },

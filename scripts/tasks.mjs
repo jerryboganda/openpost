@@ -175,7 +175,7 @@ const checks = {
     bunTest("packages/social-images/src/index.test.mjs", "scripts/social-images/render.test.mjs"),
   ]),
   reachability: stage("production reachability", [
-    commandStep("scripts/check-go-deadcode.sh"),
+    commandStep("bash", "scripts/check-go-deadcode.sh"),
     commandStep(
       "bunx",
       "knip",
@@ -859,7 +859,9 @@ async function gitFiles(directory, pattern) {
 // binary cannot sit on an install prompt.
 async function spawn(argv, step = {}, signal) {
   return spawnTaskProcess(
-    argv,
+    process.platform === "win32" && argv[0] === "bunx"
+      ? [process.execPath, "x", ...argv.slice(1)]
+      : argv,
     {
       cwd: step.cwd ? path.join(root, step.cwd) : root,
       env: { ...process.env, ...step.env },

@@ -926,15 +926,20 @@ func main() {
 	adminAgentService := adminagent.NewService(db, adminAgentDispatcher)
 	configureAdminAgent(adminAgentService, cfg, agentChat, recentLogs, agentSessionIssuer{db: db, sessions: sessionService, auth: authService})
 	if command.role.runsWeb() {
-		if count, err := adminAgentService.FailInterrupted(context.Background()); err != nil {
-			log.Printf("WARNING: failed to reconcile interrupted admin agent runs: %v", err)
-		} else if count > 0 {
-			log.Printf("marked %d interrupted admin agent runs as failed", count)
+		recoveryCtx, cancelRecovery := context.WithTimeout(context.Background(), time.Minute)
+		count, err := adminAgentService.ReconcileInterrupted(recoveryCtx)
+		cancelRecovery()
+		if err != nil {
+			log.Printf("WARNING: some admin agent runs could not be reconciled: %v", err)
+		}
+		if count > 0 {
+			log.Printf("reconciled %d interrupted admin agent runs", count)
 		}
 	}
 	adminAgentHandler := handlers.NewAdminAgentHandler(
 		adminAgentService, db, authenticator, cfg.AgentCallbackSecret,
 	)
+	adminAgentHandler.SetWorkflowService(workflowService)
 
 	apiGroup := e.Group("/api/v1")
 	humaConfig := apiroutes.OpenAPIConfig("1.0.0")

@@ -2,6 +2,7 @@
 // Posts signed agent progress to OpenPost. Runs inside GitHub Actions only.
 // The callback secret is read from the environment and never printed.
 import { createHmac } from "node:crypto";
+import { readFile, stat } from "node:fs/promises";
 
 function option(name) {
   const index = process.argv.indexOf(name);
@@ -21,6 +22,7 @@ const url = option("--url") ?? process.env.OPENPOST_AGENT_CALLBACK_URL;
 const secret = process.env.OPENPOST_AGENT_CALLBACK_SECRET ?? "";
 const runID = option("--run-id") ?? process.env.OPENPOST_AGENT_RUN_ID;
 const status = option("--status") ?? "running";
+const githubRunID = process.env.GITHUB_RUN_ID ? Number(process.env.GITHUB_RUN_ID) : undefined;
 if (!url || !secret || !runID) {
   console.error("callback requires --url, --run-id, and OPENPOST_AGENT_CALLBACK_SECRET");
   process.exit(2);
@@ -29,13 +31,34 @@ if (status !== "running" && status !== "succeeded" && status !== "failed") {
   console.error(`unsupported callback status: ${status}`);
   process.exit(2);
 }
+if (githubRunID !== undefined && (!Number.isSafeInteger(githubRunID) || githubRunID <= 0)) {
+  console.error("callback requires a valid GITHUB_RUN_ID");
+  process.exit(2);
+}
 
 const events = options("--event").map((value) => {
   const [key, kind, ...rest] = value.split("|");
   return { key, kind: kind || "progress", message: rest.join("|") };
 });
+const actionFile = option("--action-file");
+if (actionFile) {
+  try {
+    const info = await stat(actionFile);
+    if (info.size <= 16 * 1024) {
+      const lines = (await readFile(actionFile, "utf8")).split("\n");
+      const safeAction = /^(?:Command|File read|File write|File edit|File change|Repository search|File search|Web fetch|Web search|Tool call) (?:started|finished|failed|requested)$/;
+      for (const message of lines.filter((line) => safeAction.test(line)).slice(0, 64)) {
+        const key = `action-${String(events.length + 1).padStart(3, "0")}`;
+        events.push({ key, kind: "action", message });
+      }
+    }
+  } catch {
+    // The engine may fail before writing any actions. Status reporting continues.
+  }
+}
 const payload = {
   run_id: runID,
+  ...(githubRunID === undefined ? {} : { github_run_id: githubRunID }),
   status,
   summary: option("--summary") ?? "",
   failure_code: option("--failure-code") ?? "",

@@ -22,6 +22,12 @@ test("public provider claims are derived from the manifest on every claim surfac
   assert.doesNotThrow(() =>
     validatePublicClaimSurfaceSources(manifest, {
       ...sources,
+      providerIndex: sources.providerIndex.replaceAll("\n", "\r\n"),
+    }),
+  );
+  assert.doesNotThrow(() =>
+    validatePublicClaimSurfaceSources(manifest, {
+      ...sources,
       marketingCatalog: sources.marketingCatalog.replaceAll('"', "'"),
     }),
   );

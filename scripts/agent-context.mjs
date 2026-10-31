@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Fetches the private run context (prompt and engine) for one agent run. The
-// prompt never appears in workflow dispatch inputs or public run metadata.
+// Fetches private run context, including bounded earlier conversation turns.
+// Neither prompts nor history appear in dispatch inputs or public run metadata.
 import { createHmac } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 
@@ -37,6 +37,16 @@ for (const key of ["run_id", "engine", "prompt"]) {
     console.error(`context is missing ${key}`);
     process.exit(1);
   }
+}
+if (parsed.run_id !== runID || typeof parsed.workspace_id !== "string" ||
+    !Array.isArray(parsed.history) || parsed.history.length > 19 ||
+    Buffer.byteLength(JSON.stringify(parsed.history)) > 16 * 1024 + 1 ||
+    !parsed.history.every((message) =>
+      message && ["user", "assistant"].includes(message.role) &&
+      typeof message.content === "string" &&
+      Buffer.byteLength(JSON.stringify(message)) <= 4 * 1024)) {
+  console.error("context has invalid run, workspace, or conversation history");
+  process.exit(1);
 }
 if (output) {
   await writeFile(output, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
