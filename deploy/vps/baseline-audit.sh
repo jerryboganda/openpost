@@ -27,6 +27,10 @@ json_string() {
 
 safe_path() {
   local path=$1
+  if [[ "$path" == *'/../'* || "$path" == *'/./'* || "$path" == */.. || "$path" == */. ]]; then
+    printf '[redacted]'
+    return
+  fi
   case "${path,,}" in
     *'.env'*|*'secret'*|*'credential'*|*'password'*|*'token'*|*'private'*|*'.pem'*|*'.key'*|*'.p12'*|*'.pfx'*|*'id_rsa'*|*'id_ed25519'*|*'known_hosts'*|*'authorized_keys'*|*'.ssh'*|*'.npmrc'*)
       printf '[redacted]'
@@ -41,26 +45,44 @@ safe_path() {
   esac
 }
 
-printf 'audit.scope=read_only_default_openpost_paths\n'
-printf 'audit.collected_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-printf 'source.expected_directory=%s\n' "$deploy_dir"
-
-if [[ ! -d "$deploy_dir" || -L "$deploy_dir" ]]; then
-  printf 'source.directory=missing_or_symlink\n'
-elif [[ ! -e "$deploy_dir/.git" ]]; then
-  printf 'source.checkout=missing_git_marker\n'
-elif ! command -v git >/dev/null 2>&1; then
-  printf 'source.checkout=git_unavailable\n'
-else
-  root=$(git -C "$deploy_dir" rev-parse --show-toplevel 2>/dev/null || true)
-  physical_dir=$(cd "$deploy_dir" && pwd -P)
-  if [[ "$root" != "$physical_dir" ]]; then
-    printf 'source.checkout=unexpected_root_or_unreadable\n'
+path_field() {
+  local name=$1 value=${2:-}
+  if [[ -z "$value" || "$value" == '<no value>' ]]; then
+    printf '%s=missing\n' "$name"
   else
+    printf '%s=%s\n' "$name" "$(safe_path "$value")"
+  fi
+}
+
+permitted_project_directory() {
+  local path=$1
+  [[ "$path" == "$deploy_dir" || "$path" == "$deploy_dir/"* ]] || return 1
+  [[ "$path" =~ ^(/[a-zA-Z0-9_.@+-]+)+$ ]] || return 1
+  [[ "$(safe_path "$path")" == "$path" ]] || return 1
+  [[ -d "$path" && ! -L "$path" ]] || return 1
+  [[ "$(realpath -e -- "$path" 2>/dev/null)" == "$path" ]]
+}
+
+inspect_checkout() {
+  local directory=$1 root head status total shown line path index_status worktree_status
+  if [[ -L "$directory/.git" || -f "$directory/.git" ]]; then
+    printf 'source.checkout=gitfile_or_symlink_not_inspected\n'
+  elif [[ ! -d "$directory/.git" || "$(realpath -e -- "$directory/.git" 2>/dev/null)" != "$directory/.git" ]]; then
+    printf 'source.checkout=missing_or_untrusted_git_directory\n'
+  elif ! command -v git >/dev/null 2>&1; then
+    printf 'source.checkout=git_unavailable\n'
+  else
+    root=$(GIT_CEILING_DIRECTORIES="$(dirname "$directory")" GIT_OPTIONAL_LOCKS=0 git -C "$directory" rev-parse --show-toplevel 2>/dev/null || true)
+    if [[ "$root" != "$directory" ]]; then
+      printf 'source.checkout=unexpected_root_or_unreadable\n'
+      return
+    fi
     printf 'source.checkout=present\n'
-    head=$(git -C "$deploy_dir" rev-parse --verify HEAD 2>/dev/null || true)
+    head=$(GIT_OPTIONAL_LOCKS=0 git -C "$directory" rev-parse --verify HEAD 2>/dev/null || true)
     field source.head "$head" '^[0-9a-f]{40}$'
-    if status=$(git -C "$deploy_dir" -c core.quotePath=true status --porcelain=v1 --untracked-files=all 2>/dev/null); then
+    if status=$(GIT_OPTIONAL_LOCKS=0 GIT_CEILING_DIRECTORIES="$(dirname "$directory")" \
+      git -C "$directory" -c core.fsmonitor=false -c core.untrackedCache=false -c core.quotePath=true \
+      status --porcelain=v1 --untracked-files=all 2>/dev/null | awk 'NR <= 151 { print }'); then
       total=0
       shown=0
       while IFS= read -r line; do
@@ -82,19 +104,50 @@ else
           fi
         fi
       done <<< "$status"
-      printf 'source.status_entries=%s\nsource.status_shown=%s\n' "$total" "$shown"
+      printf 'source.status_entries_sampled=%s\nsource.status_shown=%s\n' "$total" "$shown"
       if (( total > shown )); then printf 'source.status_truncated=true\n'; fi
       if (( total == 0 )); then printf 'source.clean=true\n'; else printf 'source.clean=false\n'; fi
     else
       printf 'source.status=unavailable\n'
     fi
   fi
-fi
+}
+
+scan_git_markers() {
+  local directory=$1 entry seen=0 found=0 shown=0
+  while IFS= read -r -d '' entry; do
+    if (( seen >= 200 )); then
+      printf 'source.git_marker_scan_truncated=true\n'
+      break
+    fi
+    seen=$((seen + 1))
+    if [[ "${entry##*/}" == .git ]]; then
+      found=$((found + 1))
+      if (( shown < 8 )); then
+        printf 'source.git_marker=%s\n' "$(safe_path "${entry#"$directory"/}")"
+        shown=$((shown + 1))
+      fi
+    fi
+  done < <(find -P "$directory" -xdev -mindepth 1 -maxdepth 3 \
+    \( -name .git -print0 -prune \) -o \
+    \( -type d \( -name backups -o -name node_modules -o -name .ssh -o -name .env \
+      -o -iname '*secret*' -o -iname '*credential*' -o -iname '*private*' -o -iname '*token*' \) -prune \) -o \
+    -print0 2>/dev/null)
+  printf 'source.git_marker_scan_depth=3\nsource.git_marker_scan_entry_limit=200\n'
+  printf 'source.git_marker_entries_scanned=%s\nsource.git_markers_found=%s\n' "$seen" "$found"
+  if (( found > shown )); then printf 'source.git_markers_truncated=true\n'; fi
+}
+
+printf 'audit.scope=read_only_openpost_container_and_permitted_project_tree\n'
+printf 'audit.collected_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf 'source.expected_directory=%s\n' "$deploy_dir"
 
 if ! command -v docker >/dev/null 2>&1; then
   printf 'docker=command_missing\n'
+  printf 'source.checkout=not_inspected_no_compose_metadata\n'
 elif ! details=$(docker container inspect --format '{{.Name}}|{{.Id}}|{{.Config.Image}}|{{.Image}}|{{.State.Running}}' "$container" 2>/dev/null); then
   printf 'docker.container=missing_or_inaccessible\n'
+  printf 'source.checkout=not_inspected_no_compose_metadata\n'
 else
   IFS='|' read -r name container_id image_ref image_id running <<< "$details"
   field docker.container_name "$name" '^/[a-zA-Z0-9_.-]{1,80}$'
@@ -102,6 +155,78 @@ else
   field docker.image_ref "$image_ref" '^[a-zA-Z0-9][a-zA-Z0-9._/:@+-]{0,240}$'
   field docker.image_id "$image_id" '^sha256:[0-9a-f]{64}$'
   field docker.running "$running" '^(true|false)$'
+
+  # Only the four Compose identity/location labels on the known OpenPost container are read.
+  compose_project=$(docker container inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$container" 2>/dev/null || true)
+  compose_service=$(docker container inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$container" 2>/dev/null || true)
+  compose_directory=$(docker container inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$container" 2>/dev/null || true)
+  compose_configs=$(docker container inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$container" 2>/dev/null || true)
+  field docker.compose_project "$compose_project" '^[a-z0-9][a-z0-9_.-]{0,79}$'
+  field docker.compose_service "$compose_service" '^[a-z0-9][a-z0-9_.-]{0,79}$'
+  path_field docker.compose_working_dir "$compose_directory"
+
+  config_inside_directory=false
+  if [[ ${#compose_configs} -le 2048 && "$compose_configs" =~ ^[/a-zA-Z0-9_.,@+-]+$ ]]; then
+    IFS=',' read -r -a config_paths <<< "$compose_configs"
+    for config_path in "${config_paths[@]:0:8}"; do
+      path_field docker.compose_config_file "$config_path"
+      if [[ "$config_path" == "$compose_directory/"* && "$(safe_path "$config_path")" == "$config_path" ]]; then
+        config_inside_directory=true
+      fi
+    done
+    if (( ${#config_paths[@]} > 8 )); then printf 'docker.compose_config_files_truncated=true\n'; fi
+  else
+    printf 'docker.compose_config_files=missing_or_redacted\n'
+  fi
+
+  checkout_inspected=false
+  verified_compose_directory=''
+  if [[ "$compose_directory" != "$deploy_dir" && "$compose_directory" != "$deploy_dir/"* ]]; then
+    printf 'source.compose_directory=outside_permitted_project_tree\n'
+  elif [[ "$compose_service" != openpost || ! "$compose_project" =~ ^[a-z0-9][a-z0-9_.-]{0,79}$ || "$config_inside_directory" != true ]]; then
+    printf 'source.compose_directory=unverified_compose_identity_or_config\n'
+  elif permitted_project_directory "$compose_directory"; then
+    printf 'source.compose_directory=verified_under_permitted_project_tree\n'
+    verified_compose_directory=$compose_directory
+    inspect_checkout "$compose_directory"
+    scan_git_markers "$compose_directory"
+    checkout_inspected=true
+  else
+    printf 'source.compose_directory=missing_symlink_or_noncanonical_directory\n'
+  fi
+  if [[ "$checkout_inspected" != true ]]; then
+    printf 'source.checkout=not_inspected_unverified_compose_directory\n'
+  fi
+
+  # Mount information is metadata only. External host paths and sensitive names stay hidden.
+  if mount_rows=$(docker container inspect --format '{{range .Mounts}}{{printf "%s|%s|%s|%t\n" .Type .Source .Destination .RW}}{{end}}' "$container" 2>/dev/null); then
+    mount_count=0
+    while IFS='|' read -r mount_type mount_source mount_destination mount_rw; do
+      [[ -n "$mount_type" ]] || continue
+      if (( mount_count >= 12 )); then
+        printf 'docker.mounts_truncated=true\n'
+        break
+      fi
+      mount_count=$((mount_count + 1))
+      if [[ "$mount_type" != bind && "$mount_type" != volume && "$mount_type" != tmpfs ]]; then
+        printf 'docker.mount[%s].type=redacted\n' "$mount_count"
+        continue
+      fi
+      printf 'docker.mount[%s].type=%s\n' "$mount_count" "$mount_type"
+      if [[ -n "$verified_compose_directory" &&
+            ( "$mount_source" == "$verified_compose_directory" || "$mount_source" == "$verified_compose_directory/"* ) &&
+            "$(safe_path "$mount_source")" == "$mount_source" ]]; then
+        path_field "docker.mount[$mount_count].source" "$mount_source"
+      else
+        printf 'docker.mount[%s].source=[redacted_or_outside_permitted_tree]\n' "$mount_count"
+      fi
+      path_field "docker.mount[$mount_count].destination" "$mount_destination"
+      field "docker.mount[$mount_count].rw" "$mount_rw" '^(true|false)$'
+    done <<< "$mount_rows"
+    printf 'docker.mounts_sampled=%s\n' "$mount_count"
+  else
+    printf 'docker.mounts=unavailable\n'
+  fi
 
   if [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] &&
      image_details=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image_id" 2>/dev/null); then
