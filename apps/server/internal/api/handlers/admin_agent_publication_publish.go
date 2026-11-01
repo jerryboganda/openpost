@@ -24,6 +24,7 @@ type agentPublishNowBody struct {
 	ExpectedRevision int `json:"expected_revision"`
 }
 
+//nolint:gocyclo // Each guard rejects one unsafe immediate-publish request before any queue write.
 func (h *AdminAgentHandler) publishAgentPublicationNow(c echo.Context) error {
 	const operation = "publication-publish-now"
 	ctx := c.Request().Context()
@@ -142,6 +143,7 @@ func (h *AdminAgentHandler) publishAgentPublicationNow(c echo.Context) error {
 	return h.agentPublishNowResponse(c, record, false)
 }
 
+//nolint:gocyclo // Each branch names one media or setting shape that is not plain text.
 func agentPublishNowTextOnly(publication publications.PublicationResponse) bool {
 	if len(publication.Media) != 0 || len(publication.Renditions) == 0 || len(publication.Segments) > 1 {
 		return false

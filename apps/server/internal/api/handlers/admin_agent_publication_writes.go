@@ -103,6 +103,7 @@ type agentPublicationAction struct {
 	JobStatus         string `bun:"job_status"`
 }
 
+//nolint:gocyclo // Each guard rejects one unsafe draft request before the idempotent action record.
 func (h *AdminAgentHandler) writePublication(c echo.Context) error {
 	operation := "publication-create"
 	if c.Param("id") != "" {

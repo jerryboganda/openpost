@@ -116,6 +116,7 @@ func (d *GitHubDispatcher) Cancel(ctx context.Context, run AgentRun) error {
 
 // LookupRun trusts a stored, signed run ID. Before registration, it accepts
 // only an unambiguous exact workflow title within a bounded dispatch search.
+//nolint:gocyclo // Each branch classifies one GitHub run lookup outcome.
 func (d *GitHubDispatcher) LookupRun(ctx context.Context, run AgentRun) (GitHubRunState, error) {
 	title := "openpost-agent-" + run.ID
 	if run.GitHubRunID > 0 {

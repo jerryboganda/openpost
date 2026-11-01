@@ -172,6 +172,7 @@ func registerAdminAgentRoutes(api huma.API, deps RouteDeps) {
 	handlers.NewAdminAgentHandler(nil, deps.DB, deps.Authenticator, "").RegisterRoutes(api)
 }
 
+//nolint:gocyclo // Each branch registers an independent, typed handler group.
 func RegisterHumaRoutes(api huma.API, deps RouteDeps) {
 	providerRegistrars := append([]func(string, platform.Adapter){}, deps.ProviderRegistrars...)
 	profileHandler := deps.ProfileHandler

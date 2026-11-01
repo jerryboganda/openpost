@@ -28,6 +28,7 @@ type agentAnalyticsSnapshot struct {
 	UpdatedAt        time.Time                                   `json:"updated_at"`
 }
 
+//nolint:gocyclo // Each branch bounds one stored analytics aggregate.
 func (h *AdminAgentHandler) readAnalytics(c echo.Context) error {
 	workspaceID, err := h.authorizeRead(c, "analytics")
 	if err != nil {

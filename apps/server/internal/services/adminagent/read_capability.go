@@ -47,6 +47,7 @@ func IssueReadCapability(secret string, run AgentRun, workspaceID, operation str
 	return encoded + "." + signReadCapability(secret, encoded), nil
 }
 
+//nolint:gocyclo // Each check binds the capability to one claim.
 func VerifyReadCapability(secret, token string, run AgentRun, workspaceID, operation string, now time.Time) error {
 	if secret == "" || len(token) > 1024 || run.GitHubRunID <= 0 {
 		return ErrInvalidCallback
@@ -94,6 +95,7 @@ func IssueWorkflowWriteCapability(secret string, run AgentRun, workspaceID, oper
 	return encoded + "." + signWorkflowWriteCapability(secret, encoded), nil
 }
 
+//nolint:gocyclo // Each check binds the capability to one claim.
 func VerifyWorkflowWriteCapability(secret, token string, run AgentRun, workspaceID, operation string, now time.Time) error {
 	if secret == "" || len(token) > 1024 || run.GitHubRunID <= 0 || (operation != "workflow-create" && operation != "workflow-update") {
 		return ErrInvalidCallback
@@ -136,6 +138,7 @@ func IssuePublicationWriteCapability(secret string, run AgentRun, workspaceID, o
 	return encoded + "." + signPublicationWriteCapability(secret, encoded), nil
 }
 
+//nolint:gocyclo // Each check binds the capability to one claim.
 func VerifyPublicationWriteCapability(secret, token string, run AgentRun, workspaceID, operation string, now time.Time) error {
 	if secret == "" || len(token) > 1024 || run.GitHubRunID <= 0 || !publicationWriteOperationAllowed(operation) {
 		return ErrInvalidCallback

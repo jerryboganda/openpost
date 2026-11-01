@@ -848,6 +848,7 @@ func (s *Service) CancelRun(ctx context.Context, runID string) (*AgentRun, error
 	return run, nil
 }
 
+//nolint:gocyclo // Each branch handles one signed callback state transition.
 func (s *Service) ApplyCallback(ctx context.Context, callback AgentCallback) (*AgentRun, error) {
 	status, err := validateAgentCallback(&callback)
 	if err != nil {
@@ -1196,6 +1197,7 @@ func (s *Service) interruptAssistant(ctx context.Context, run *AgentRun) (bool, 
 	return applied, err
 }
 
+//nolint:gocyclo // Each branch handles one GitHub run state after restart.
 func (s *Service) reconcileGitHubRun(ctx context.Context, run *AgentRun) (bool, error) {
 	if s.dispatcher == nil {
 		return false, errors.New("GitHub Actions is not configured")

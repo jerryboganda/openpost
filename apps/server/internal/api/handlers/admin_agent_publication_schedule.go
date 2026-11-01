@@ -21,6 +21,7 @@ type agentScheduleBody struct {
 	ScheduledAt      time.Time `json:"scheduled_at"`
 }
 
+//nolint:gocyclo // Each guard rejects one unsafe scheduling request before any queue write.
 func (h *AdminAgentHandler) scheduleAgentPublication(c echo.Context) error {
 	operation := "publication-schedule"
 	if strings.HasSuffix(c.Path(), "/reschedule") {

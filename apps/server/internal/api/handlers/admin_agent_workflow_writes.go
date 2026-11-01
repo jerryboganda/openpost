@@ -96,6 +96,7 @@ type agentWorkflowAction struct {
 	Outcome       string `bun:"outcome"`
 }
 
+//nolint:gocyclo // Each guard rejects one unsafe workflow request before native validation.
 func (h *AdminAgentHandler) writeWorkflow(c echo.Context) error {
 	operation := "workflow-create"
 	if c.Param("id") != "" {
