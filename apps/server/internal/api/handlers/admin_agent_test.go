@@ -545,9 +545,9 @@ func TestAdminAgentSignedAccountReadUsesConversationWorkspace(t *testing.T) {
 	_, err = db.NewInsert().Model(&models.WorkspaceMember{WorkspaceID: "ws-1", UserID: "user-1", Role: models.WorkspaceRoleViewer}).Exec(ctx)
 	require.NoError(t, err)
 	for _, acc := range []models.SocialAccount{
-		{ID: "allowed", WorkspaceID: "ws-1", Slug: "allowed", Platform: "bluesky", AccountUsername: "selected", IsActive: true},
-		{ID: "inactive", WorkspaceID: "ws-1", Slug: "inactive", Platform: "x", IsActive: false},
-		{ID: "other", WorkspaceID: "ws-2", Slug: "other", Platform: "x", IsActive: true},
+		{AccessTokenEnc: []byte("token"), ID: "allowed", WorkspaceID: "ws-1", Slug: "allowed", Platform: "bluesky", AccountUsername: "selected", IsActive: true},
+		{AccessTokenEnc: []byte("token"), ID: "inactive", WorkspaceID: "ws-1", Slug: "inactive", Platform: "x", IsActive: false},
+		{AccessTokenEnc: []byte("token"), ID: "other", WorkspaceID: "ws-2", Slug: "other", Platform: "x", IsActive: true},
 	} {
 		_, err = db.NewInsert().Model(&acc).Exec(ctx)
 		require.NoError(t, err)

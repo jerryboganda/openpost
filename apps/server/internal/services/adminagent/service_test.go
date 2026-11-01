@@ -819,6 +819,9 @@ func TestConversationsAreTitledFromTheFirstMessageAndDeletable(t *testing.T) {
 	require.Equal(t, "Why did the nightly publish job fail?", view.Title)
 
 	require.ErrorIs(t, service.DeleteConversation(ctx, conversation.ID), ErrRunActive, "a task in progress must be stopped first")
+	githubID := int64(4242)
+	_, err = service.ApplyCallback(ctx, AgentCallback{RunID: run.ID, GitHubRunID: &githubID, Status: string(RunRunning)})
+	require.NoError(t, err)
 	_, err = service.CancelRun(ctx, run.ID)
 	require.NoError(t, err)
 	require.NoError(t, service.DeleteConversation(ctx, conversation.ID))

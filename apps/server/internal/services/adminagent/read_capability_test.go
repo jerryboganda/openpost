@@ -21,7 +21,7 @@ func TestReadCapabilityBoundaries(t *testing.T) {
 	require.Error(t, VerifyReadCapability("signing-secret", token, run, "workspace-one", "accounts", now.Add(21*time.Minute)))
 	_, err = IssueReadCapability("signing-secret", AgentRun{ID: "unregistered"}, "workspace-one", "accounts", now)
 	require.Error(t, err)
-	_, err = IssueReadCapability("signing-secret", run, "workspace-one", "posts", now)
+	_, err = IssueReadCapability("signing-secret", run, "workspace-one", "shell", now)
 	require.Error(t, err)
 }
 
