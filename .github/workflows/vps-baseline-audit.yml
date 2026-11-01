@@ -60,9 +60,11 @@ jobs:
             exit 1
           fi
           fingerprint="$(printf '%s' "$destination" | sha256sum | cut -c 1-20)"
-          printf 'target.configured_identity_fingerprint=%s\n' "$fingerprint" >> "$report"
-          printf 'target.ssh_host_key=verified_against_configured_known_hosts\n' >> "$report"
-          printf 'target.ssh_login=verified_against_configured_user\n' >> "$report"
+          {
+            printf 'target.configured_identity_fingerprint=%s\n' "$fingerprint"
+            printf 'target.ssh_host_key=verified_against_configured_known_hosts\n'
+            printf 'target.ssh_login=verified_against_configured_user\n'
+          } >> "$report"
           if ! tr -d '\r' < deploy/vps/baseline-audit.sh |
             ssh "${ssh_options[@]}" "$destination" 'bash -s' >> "$report" 2>/dev/null; then
             echo '::error::Remote read-only collector failed; evidence may be incomplete'

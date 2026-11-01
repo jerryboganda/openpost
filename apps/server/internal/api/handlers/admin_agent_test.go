@@ -552,6 +552,8 @@ func TestAdminAgentSignedAccountReadUsesConversationWorkspace(t *testing.T) {
 		_, err = db.NewInsert().Model(&acc).Exec(ctx)
 		require.NoError(t, err)
 	}
+	_, err = db.NewUpdate().Model((*models.SocialAccount)(nil)).Set("is_active = ?", false).Where("id = ?", "inactive").Exec(ctx)
+	require.NoError(t, err)
 	for _, migration := range []string{"176_admin_agent.sql", "177_admin_agent_chat.sql", "182_admin_agent_one_active_run.sql", "178_admin_agent_github_run_id.sql"} {
 		data, readErr := os.ReadFile("../../database/migrations/" + migration)
 		require.NoError(t, readErr)

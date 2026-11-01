@@ -29,12 +29,14 @@ test("coding engine runs in a separate job without global callback credentials",
   assert.match(workflow, /report:[\s\S]*?OPENPOST_AGENT_CALLBACK_SECRET/);
 });
 
-test("VPS deployment is never triggered automatically while baseline is unverified", () => {
+test("VPS deployment needs a manual main dispatch and both operator gates", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/fork-release.yml", import.meta.url),
     "utf8",
   );
   assert.doesNotMatch(workflow, /^\s{2}push:/m);
   assert.match(workflow, /default: build-only/);
-  assert.match(workflow, /false && always\(\)/);
+  assert.match(workflow, /vars\.OPENPOST_DEPLOY_ENABLED == 'true'/);
+  assert.match(workflow, /vars\.OPENPOST_VPS_BASELINE_VERIFIED == 'true'/);
+  assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
 });
