@@ -45,7 +45,9 @@
 	);
 	const availableWorkspaces = $derived(workspaceCtx.workspaces);
 	const workspaceID = $derived(session.active?.workspace_id ?? newWorkspaceID);
-	const chosenWorkspace = $derived(availableWorkspaces.find((workspace) => workspace.id === workspaceID));
+	const chosenWorkspace = $derived(
+		availableWorkspaces.find((workspace) => workspace.id === workspaceID)
+	);
 	const selectedEngine = $derived(
 		session.engines.find((candidate) => candidate.id === (session.active?.engine ?? session.engine))
 	);
@@ -246,8 +248,15 @@
 						</Button>
 						<h2 class="min-w-0 flex-1 truncate text-sm font-medium">{title}</h2>
 						{#if !session.active && availableWorkspaces.length > 0}
-							<Select.Root type="single" value={newWorkspaceID} onValueChange={(value) => (newWorkspaceID = value)}>
-								<Select.Trigger class="h-9 w-36 max-w-[35vw]" aria-label={m.workspace_setup_workspace()}>
+							<Select.Root
+								type="single"
+								value={newWorkspaceID}
+								onValueChange={(value) => (newWorkspaceID = value)}
+							>
+								<Select.Trigger
+									class="h-9 w-36 max-w-[35vw]"
+									aria-label={m.workspace_setup_workspace()}
+								>
 									{chosenWorkspace?.name ?? m.workspace_setup_workspace()}
 								</Select.Trigger>
 								<Select.Content>
@@ -257,7 +266,10 @@
 								</Select.Content>
 							</Select.Root>
 						{:else if chosenWorkspace}
-							<span class="hidden max-w-32 truncate text-xs text-muted-foreground sm:inline" title={m.workspace_setup_workspace()}>
+							<span
+								class="hidden max-w-32 truncate text-xs text-muted-foreground sm:inline"
+								title={m.workspace_setup_workspace()}
+							>
 								{chosenWorkspace.name}
 							</span>
 						{/if}

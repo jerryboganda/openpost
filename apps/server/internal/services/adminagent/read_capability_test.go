@@ -64,7 +64,9 @@ func TestPublicationSchedulingCapabilitiesAreIsolated(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, VerifyPublicationWriteCapability("secret", token, run, "workspace", operation, now))
 		for _, other := range []string{"publication-create", "publication-update", "publication-schedule", "publication-reschedule", "publication-publish-now"} {
-			if other != operation { require.Error(t, VerifyPublicationWriteCapability("secret", token, run, "workspace", other, now)) }
+			if other != operation {
+				require.Error(t, VerifyPublicationWriteCapability("secret", token, run, "workspace", other, now))
+			}
 		}
 		require.Error(t, VerifyReadCapability("secret", token, run, "workspace", "posts", now))
 		require.Error(t, VerifyPublicationWriteCapability("secret", token, run, "different", operation, now))

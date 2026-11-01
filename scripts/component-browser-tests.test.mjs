@@ -34,7 +34,12 @@ function runBrowser(args = [], failure = null) {
     );
     const result = spawnSync(
       nodeExecutable,
-      ["--import", pathToFileURL(preload).href, path.resolve("apps/web/scripts/component-browser-tests.mjs"), ...args],
+      [
+        "--import",
+        pathToFileURL(preload).href,
+        path.resolve("apps/web/scripts/component-browser-tests.mjs"),
+        ...args,
+      ],
       { cwd: directory, encoding: "utf8", timeout: 10000 },
     );
     let calls = [];

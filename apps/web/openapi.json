@@ -8563,6 +8563,16 @@
 					"available": {
 						"type": "boolean"
 					},
+					"credential_checked_at": {
+						"format": "date-time",
+						"type": "string"
+					},
+					"credential_status": {
+						"type": "string"
+					},
+					"dispatch_configured": {
+						"type": "boolean"
+					},
 					"id": {
 						"type": "string"
 					},
@@ -8573,7 +8583,7 @@
 						"type": "string"
 					}
 				},
-				"required": ["id", "label", "available"],
+				"required": ["id", "label", "available", "dispatch_configured", "credential_status"],
 				"type": "object"
 			},
 			"ErrorDetail": {

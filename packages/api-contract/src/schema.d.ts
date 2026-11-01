@@ -10563,6 +10563,10 @@ export interface components {
         };
         EngineStatus: {
             available: boolean;
+            /** Format: date-time */
+            credential_checked_at?: string;
+            credential_status: string;
+            dispatch_configured: boolean;
             id: string;
             label: string;
             reason?: string;

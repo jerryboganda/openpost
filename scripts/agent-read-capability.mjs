@@ -15,8 +15,33 @@ const runID = process.env.OPENPOST_AGENT_RUN_ID;
 const githubRunID = Number(process.env.GITHUB_RUN_ID);
 const output = option("--output");
 const operation = option("--operation") || "accounts";
-const write = operation === "workflow-create" || operation === "workflow-update" || operation.startsWith("publication-");
-if (!callbackURL || !secret || !runID || !output || !["accounts", "posts", "schedules", "analytics", "workflows", "workflow-runs", "workflow-create", "workflow-update", "publication-create", "publication-update", "publication-schedule", "publication-reschedule", "publication-publish-now"].includes(operation) || !Number.isSafeInteger(githubRunID) || githubRunID <= 0) {
+const write =
+  operation === "workflow-create" ||
+  operation === "workflow-update" ||
+  operation.startsWith("publication-");
+if (
+  !callbackURL ||
+  !secret ||
+  !runID ||
+  !output ||
+  ![
+    "accounts",
+    "posts",
+    "schedules",
+    "analytics",
+    "workflows",
+    "workflow-runs",
+    "workflow-create",
+    "workflow-update",
+    "publication-create",
+    "publication-update",
+    "publication-schedule",
+    "publication-reschedule",
+    "publication-publish-now",
+  ].includes(operation) ||
+  !Number.isSafeInteger(githubRunID) ||
+  githubRunID <= 0
+) {
   console.error("read capability issuance is unavailable");
   process.exit(2);
 }
@@ -25,7 +50,10 @@ if (base.protocol !== "https:" || !base.pathname.endsWith("/callback")) {
   console.error("read capability issuance requires the HTTPS callback endpoint");
   process.exit(2);
 }
-const url = new URL(`${base.pathname.replace(/\/callback$/, "")}/runs/${encodeURIComponent(runID)}/${write ? (operation.startsWith("publication-") ? "publication-write-capability" : "workflow-write-capability") : "read-capability"}`, base);
+const url = new URL(
+  `${base.pathname.replace(/\/callback$/, "")}/runs/${encodeURIComponent(runID)}/${write ? (operation.startsWith("publication-") ? "publication-write-capability" : "workflow-write-capability") : "read-capability"}`,
+  base,
+);
 const body = JSON.stringify({ github_run_id: githubRunID, operation });
 const timestamp = new Date().toISOString();
 const signed = `POST ${url.pathname}\n${body}`;

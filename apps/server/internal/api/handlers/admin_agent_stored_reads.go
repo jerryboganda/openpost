@@ -16,7 +16,7 @@ import (
 type agentAnalyticsSnapshot struct {
 	SubjectType      string                                      `json:"subject_type"`
 	SubjectID        string                                      `json:"subject_id"`
-	SocialAccountID   string                                      `json:"social_account_id"`
+	SocialAccountID  string                                      `json:"social_account_id"`
 	Platform         string                                      `json:"platform"`
 	ConnectionStatus string                                      `json:"connection_status"`
 	CollectionStatus string                                      `json:"collection_status"`

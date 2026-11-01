@@ -337,7 +337,9 @@ func RegisterHumaRoutes(api huma.API, deps RouteDeps) {
 	publicationHandler.SetProviderReadiness(deps.ProviderReadinessService)
 	publicationHandler.SetTelemetry(deps.Telemetry)
 	publicationHandler.SetNotificationService(deps.NotificationService)
-	if deps.AdminAgentHandler != nil { deps.AdminAgentHandler.SetPublicationHandler(publicationHandler) }
+	if deps.AdminAgentHandler != nil {
+		deps.AdminAgentHandler.SetPublicationHandler(publicationHandler)
+	}
 	publicationHandler.RegisterRoutes(api)
 	publicationBuildHandler := handlers.NewPublicationBuildHandler(deps.DB, deps.Authenticator, deps.PublicationBuilder)
 	publicationBuildHandler.SetPublicationApplication(publicationHandler.BuilderApplication())

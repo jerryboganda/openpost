@@ -108,7 +108,11 @@ test("origin Vary headers cover only canonical HTML and explicit Markdown within
   assert.ok(headerRuleHas(rendered, "/index.md", "Vary: Accept"));
   assert.ok(headerRuleHas(rendered, "/index.md", "X-Robots-Tag: noindex"));
   assert.ok(
-    headerRuleHas(base.replaceAll("\n", "\r\n"), "/index.md", "Content-Type: text/markdown; charset=utf-8"),
+    headerRuleHas(
+      base.replaceAll("\n", "\r\n"),
+      "/index.md",
+      "Content-Type: text/markdown; charset=utf-8",
+    ),
   );
   assert.match(rendered, /(?:^|\n)\/\n  Link: [^\n]+\n  Vary: Accept\n/u);
   assert.match(rendered, /<\/\.well-known\/api-catalog>; rel="api-catalog"/u);

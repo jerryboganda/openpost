@@ -6,7 +6,10 @@ import path from "node:path";
 import test from "node:test";
 import { extract } from "tar";
 
-import { generateMarketingDiscoveryArtifacts, parseSkillFrontmatter } from "./public-agent-discovery.mjs";
+import {
+  generateMarketingDiscoveryArtifacts,
+  parseSkillFrontmatter,
+} from "./public-agent-discovery.mjs";
 
 const expectedArtifactURLs = [
   {
@@ -25,7 +28,9 @@ const expectedArtifactURLs = [
 
 test("CLI skill frontmatter accepts BOM and CRLF", () => {
   assert.deepEqual(
-    parseSkillFrontmatter("\uFEFF---\r\nname: openpost-cli\r\ndescription: Windows skill\r\n---\r\n# Body"),
+    parseSkillFrontmatter(
+      "\uFEFF---\r\nname: openpost-cli\r\ndescription: Windows skill\r\n---\r\n# Body",
+    ),
     { name: "openpost-cli", description: "Windows skill" },
   );
 });

@@ -203,7 +203,10 @@ function extractPublicClaimProjection(source, label) {
   ) {
     throw new Error(`${label} has multiple public certification projections`);
   }
-  const projection = source.slice(start + publicProjectionStart.length, end).trim().replaceAll("\r\n", "\n");
+  const projection = source
+    .slice(start + publicProjectionStart.length, end)
+    .trim()
+    .replaceAll("\r\n", "\n");
   return `${publicProjectionStart}\n${projection}\n${publicProjectionEnd}`;
 }
 

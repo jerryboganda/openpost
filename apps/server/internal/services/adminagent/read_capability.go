@@ -79,23 +79,37 @@ func signReadCapability(secret, encoded string) string {
 
 // Write capabilities use a distinct signing domain and cannot authorize reads.
 func IssueWorkflowWriteCapability(secret string, run AgentRun, workspaceID, operation string, now time.Time) (string, error) {
-	if operation != "workflow-create" && operation != "workflow-update" { return "", ErrInvalidCallback }
-	if secret == "" || run.ID == "" || run.GitHubRunID <= 0 || workspaceID == "" { return "", ErrInvalidCallback }
+	if operation != "workflow-create" && operation != "workflow-update" {
+		return "", ErrInvalidCallback
+	}
+	if secret == "" || run.ID == "" || run.GitHubRunID <= 0 || workspaceID == "" {
+		return "", ErrInvalidCallback
+	}
 	claims := readCapabilityClaims{RunID: run.ID, GitHubRunID: run.GitHubRunID, WorkspaceID: workspaceID, Operation: operation, IssuedAt: now.Unix(), ExpiresAt: now.Add(readCapabilityLifetime).Unix()}
 	data, err := json.Marshal(claims)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	encoded := base64.RawURLEncoding.EncodeToString(data)
 	return encoded + "." + signWorkflowWriteCapability(secret, encoded), nil
 }
 
 func VerifyWorkflowWriteCapability(secret, token string, run AgentRun, workspaceID, operation string, now time.Time) error {
-	if secret == "" || len(token) > 1024 || run.GitHubRunID <= 0 || (operation != "workflow-create" && operation != "workflow-update") { return ErrInvalidCallback }
+	if secret == "" || len(token) > 1024 || run.GitHubRunID <= 0 || (operation != "workflow-create" && operation != "workflow-update") {
+		return ErrInvalidCallback
+	}
 	encoded, signature, ok := strings.Cut(token, ".")
-	if !ok || !hmac.Equal([]byte(signature), []byte(signWorkflowWriteCapability(secret, encoded))) { return ErrInvalidCallback }
+	if !ok || !hmac.Equal([]byte(signature), []byte(signWorkflowWriteCapability(secret, encoded))) {
+		return ErrInvalidCallback
+	}
 	data, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil { return ErrInvalidCallback }
+	if err != nil {
+		return ErrInvalidCallback
+	}
 	var claims readCapabilityClaims
-	if json.Unmarshal(data, &claims) != nil || claims.RunID != run.ID || claims.GitHubRunID != run.GitHubRunID || claims.WorkspaceID != workspaceID || claims.Operation != operation || claims.IssuedAt > now.Unix() || claims.ExpiresAt <= now.Unix() || claims.ExpiresAt-claims.IssuedAt != int64(readCapabilityLifetime/time.Second) { return ErrInvalidCallback }
+	if json.Unmarshal(data, &claims) != nil || claims.RunID != run.ID || claims.GitHubRunID != run.GitHubRunID || claims.WorkspaceID != workspaceID || claims.Operation != operation || claims.IssuedAt > now.Unix() || claims.ExpiresAt <= now.Unix() || claims.ExpiresAt-claims.IssuedAt != int64(readCapabilityLifetime/time.Second) {
+		return ErrInvalidCallback
+	}
 	return nil
 }
 
@@ -107,23 +121,37 @@ func signWorkflowWriteCapability(secret, encoded string) string {
 }
 
 func IssuePublicationWriteCapability(secret string, run AgentRun, workspaceID, operation string, now time.Time) (string, error) {
-	if !publicationWriteOperationAllowed(operation) { return "", ErrInvalidCallback }
-	if secret == "" || run.ID == "" || run.GitHubRunID <= 0 || workspaceID == "" { return "", ErrInvalidCallback }
+	if !publicationWriteOperationAllowed(operation) {
+		return "", ErrInvalidCallback
+	}
+	if secret == "" || run.ID == "" || run.GitHubRunID <= 0 || workspaceID == "" {
+		return "", ErrInvalidCallback
+	}
 	claims := readCapabilityClaims{RunID: run.ID, GitHubRunID: run.GitHubRunID, WorkspaceID: workspaceID, Operation: operation, IssuedAt: now.Unix(), ExpiresAt: now.Add(readCapabilityLifetime).Unix()}
 	data, err := json.Marshal(claims)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	encoded := base64.RawURLEncoding.EncodeToString(data)
 	return encoded + "." + signPublicationWriteCapability(secret, encoded), nil
 }
 
 func VerifyPublicationWriteCapability(secret, token string, run AgentRun, workspaceID, operation string, now time.Time) error {
-	if secret == "" || len(token) > 1024 || run.GitHubRunID <= 0 || !publicationWriteOperationAllowed(operation) { return ErrInvalidCallback }
+	if secret == "" || len(token) > 1024 || run.GitHubRunID <= 0 || !publicationWriteOperationAllowed(operation) {
+		return ErrInvalidCallback
+	}
 	encoded, signature, ok := strings.Cut(token, ".")
-	if !ok || !hmac.Equal([]byte(signature), []byte(signPublicationWriteCapability(secret, encoded))) { return ErrInvalidCallback }
+	if !ok || !hmac.Equal([]byte(signature), []byte(signPublicationWriteCapability(secret, encoded))) {
+		return ErrInvalidCallback
+	}
 	data, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil { return ErrInvalidCallback }
+	if err != nil {
+		return ErrInvalidCallback
+	}
 	var claims readCapabilityClaims
-	if json.Unmarshal(data, &claims) != nil || claims.RunID != run.ID || claims.GitHubRunID != run.GitHubRunID || claims.WorkspaceID != workspaceID || claims.Operation != operation || claims.IssuedAt > now.Unix() || claims.ExpiresAt <= now.Unix() || claims.ExpiresAt-claims.IssuedAt != int64(readCapabilityLifetime/time.Second) { return ErrInvalidCallback }
+	if json.Unmarshal(data, &claims) != nil || claims.RunID != run.ID || claims.GitHubRunID != run.GitHubRunID || claims.WorkspaceID != workspaceID || claims.Operation != operation || claims.IssuedAt > now.Unix() || claims.ExpiresAt <= now.Unix() || claims.ExpiresAt-claims.IssuedAt != int64(readCapabilityLifetime/time.Second) {
+		return ErrInvalidCallback
+	}
 	return nil
 }
 

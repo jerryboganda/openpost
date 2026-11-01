@@ -202,15 +202,15 @@ func TestAdminAgentAuthorizationAndConversationFlow(t *testing.T) {
 		}
 		decodeAgentBody(t, started, &startedBody)
 		require.Equal(t, "dispatched", startedBody.AgentRun.Status)
-	duplicate := requestAgent(t, e, http.MethodPost,
-		"/api/v1/admin/agent/conversations/"+conversationID+"/messages",
-		map[string]string{"prompt": "Start another run."})
-	require.Equal(t, http.StatusConflict, duplicate.Code, duplicate.Body.String())
-	require.Len(t, dispatcher.dispatched, 1)
-	pendingCancellation := requestAgent(t, e, http.MethodPost,
-		"/api/v1/admin/agent/runs/"+startedBody.AgentRun.ID+"/cancel", nil)
-	require.Equal(t, http.StatusConflict, pendingCancellation.Code)
-	require.Empty(t, dispatcher.cancelled)
+		duplicate := requestAgent(t, e, http.MethodPost,
+			"/api/v1/admin/agent/conversations/"+conversationID+"/messages",
+			map[string]string{"prompt": "Start another run."})
+		require.Equal(t, http.StatusConflict, duplicate.Code, duplicate.Body.String())
+		require.Len(t, dispatcher.dispatched, 1)
+		pendingCancellation := requestAgent(t, e, http.MethodPost,
+			"/api/v1/admin/agent/runs/"+startedBody.AgentRun.ID+"/cancel", nil)
+		require.Equal(t, http.StatusConflict, pendingCancellation.Code)
+		require.Empty(t, dispatcher.cancelled)
 
 		view, err := service.GetConversation(t.Context(), conversationID)
 		require.NoError(t, err)
@@ -597,7 +597,9 @@ func TestAdminAgentSignedAccountReadUsesConversationWorkspace(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, issue(54321).Code)
 	issued := issue(12345)
 	require.Equal(t, http.StatusOK, issued.Code, issued.Body.String())
-	var result struct { Capability string `json:"capability"` }
+	var result struct {
+		Capability string `json:"capability"`
+	}
 	require.NoError(t, json.Unmarshal(issued.Body.Bytes(), &result))
 	require.NotEmpty(t, result.Capability)
 	require.Equal(t, http.StatusUnauthorized, read(path, "invalid").Code)

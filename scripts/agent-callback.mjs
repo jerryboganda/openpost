@@ -46,7 +46,8 @@ if (actionFile) {
     const info = await stat(actionFile);
     if (info.size <= 16 * 1024) {
       const lines = (await readFile(actionFile, "utf8")).split("\n");
-      const safeAction = /^(?:Command|File read|File write|File edit|File change|Repository search|File search|Web fetch|Web search|Tool call) (?:started|finished|failed|requested)$/;
+      const safeAction =
+        /^(?:Command|File read|File write|File edit|File change|Repository search|File search|Web fetch|Web search|Tool call) (?:started|finished|failed|requested)$/;
       for (const message of lines.filter((line) => safeAction.test(line)).slice(0, 64)) {
         const key = `action-${String(events.length + 1).padStart(3, "0")}`;
         events.push({ key, kind: "action", message });

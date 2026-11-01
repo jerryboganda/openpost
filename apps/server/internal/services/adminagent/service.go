@@ -23,12 +23,12 @@ import (
 )
 
 const (
-	MaxPromptCharacters  = 20_000
-	MaxSummaryCharacters = 20_000
-	maxAuditTextBytes = 512
-	maxEventsPerRun = 128
-	maxCallbackEvents = 16
-	maxConversationTitle = 120
+	MaxPromptCharacters       = 20_000
+	MaxSummaryCharacters      = 20_000
+	maxAuditTextBytes         = 512
+	maxEventsPerRun           = 128
+	maxCallbackEvents         = 16
+	maxConversationTitle      = 120
 	maxContextHistoryMessages = 19 // Plus the current prompt: 20 turns, as in the built-in assistant.
 	maxContextHistoryBytes    = 16 << 10
 	maxContextMessageBytes    = 4 << 10
@@ -81,14 +81,14 @@ func (s RunStatus) Terminal() bool {
 }
 
 var (
-	ErrConversationNotFound = errors.New("conversation not found")
-	ErrRunNotFound          = errors.New("run not found")
-	ErrRunActive            = errors.New("conversation already has an active run")
-	ErrRunTerminal          = errors.New("run has already finished")
-	ErrInvalidEngine        = errors.New("unsupported engine")
-	ErrInvalidPrompt        = errors.New("prompt must contain between 1 and 20000 characters")
-	ErrInvalidCallback      = errors.New("invalid agent callback")
-	ErrGitHubRunIDPending   = errors.New("GitHub Actions has not reported its run ID yet; retry cancellation")
+	ErrConversationNotFound  = errors.New("conversation not found")
+	ErrRunNotFound           = errors.New("run not found")
+	ErrRunActive             = errors.New("conversation already has an active run")
+	ErrRunTerminal           = errors.New("run has already finished")
+	ErrInvalidEngine         = errors.New("unsupported engine")
+	ErrInvalidPrompt         = errors.New("prompt must contain between 1 and 20000 characters")
+	ErrInvalidCallback       = errors.New("invalid agent callback")
+	ErrGitHubRunIDPending    = errors.New("GitHub Actions has not reported its run ID yet; retry cancellation")
 	ErrGitHubRunUnidentified = errors.New("GitHub Actions run was not identified by its exact title")
 	ErrGitHubRunAmbiguous    = errors.New("multiple GitHub Actions runs have the same agent title")
 	ErrGitHubRunSearchLimit  = errors.New("GitHub Actions run search exceeded its page limit")

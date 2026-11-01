@@ -3,7 +3,10 @@ package handlers
 import "testing"
 
 func TestPublicationDraftWriteIntent(t *testing.T) {
-	cases := []struct { prompt, operation string; allowed bool }{
+	cases := []struct {
+		prompt, operation string
+		allowed           bool
+	}{
 		{"Create a draft post for our launch", "publication-create", true},
 		{"Please update the draft post", "publication-update", true},
 		{"Create a draft post", "publication-update", false},
@@ -40,6 +43,8 @@ func TestPublicationDraftWriteIntent(t *testing.T) {
 		{"Publish the workflow now", "publication-publish-now", false},
 	}
 	for _, tc := range cases {
-		if got := explicitPublicationIntent(tc.prompt, tc.operation); got != tc.allowed { t.Errorf("intent %q %q: got %v", tc.prompt, tc.operation, got) }
+		if got := explicitPublicationIntent(tc.prompt, tc.operation); got != tc.allowed {
+			t.Errorf("intent %q %q: got %v", tc.prompt, tc.operation, got)
+		}
 	}
 }

@@ -741,23 +741,45 @@ func (commands publicationApplication) Schedule(
 func (commands publicationApplication) ScheduleDraft(ctx context.Context, userID, publicationID string, expectedRevision int, scheduledAt time.Time) (queued publicationEnqueueResult, err error) {
 	defer categorizePublicationError(&err)
 	prepared, err := commands.prepareUpdate(ctx, userID, publicationID, PublicationUpdateBody{ExpectedRevision: expectedRevision, ScheduledAt: &scheduledAt})
-	if err != nil { return queued, err }
-	if prepared.existing.Status != models.PublicationStatusDraft { return queued, publicationservice.NewError(publicationservice.ErrorInvalidLifecycleState, errors.New("only a draft can be scheduled")) }
-	if err = validateFuturePublicationSchedule(scheduledAt, commands.now()); err != nil { return queued, err }
-	if err = commands.validateForEnqueue(ctx, userID, publicationID); err != nil { return queued, err }
-	if err = commands.handler.checkScheduledPublicationQuota(ctx, prepared.existing.WorkspaceID, scheduledAt); err != nil { return queued, err }
-	if err = commands.beforeQueueTransaction(ctx); err != nil { return queued, err }
+	if err != nil {
+		return queued, err
+	}
+	if prepared.existing.Status != models.PublicationStatusDraft {
+		return queued, publicationservice.NewError(publicationservice.ErrorInvalidLifecycleState, errors.New("only a draft can be scheduled"))
+	}
+	if err = validateFuturePublicationSchedule(scheduledAt, commands.now()); err != nil {
+		return queued, err
+	}
+	if err = commands.validateForEnqueue(ctx, userID, publicationID); err != nil {
+		return queued, err
+	}
+	if err = commands.handler.checkScheduledPublicationQuota(ctx, prepared.existing.WorkspaceID, scheduledAt); err != nil {
+		return queued, err
+	}
+	if err = commands.beforeQueueTransaction(ctx); err != nil {
+		return queued, err
+	}
 	err = commands.handler.db.RunInTx(ctx, &sql.TxOptions{}, func(txCtx context.Context, tx bun.Tx) error {
 		current, loadErr := commands.handler.loadEditablePublicationTx(txCtx, tx, publicationID)
-		if loadErr != nil { return loadErr }
-		if current.Status != models.PublicationStatusDraft { return publicationservice.NewError(publicationservice.ErrorInvalidLifecycleState, errors.New("publication is no longer a draft")) }
-		if current.Revision != expectedRevision { return commands.handler.publicationRevisionConflict(txCtx, tx, current, expectedRevision) }
-		if _, updateErr := commands.updateTx(txCtx, tx, userID, prepared); updateErr != nil { return updateErr }
+		if loadErr != nil {
+			return loadErr
+		}
+		if current.Status != models.PublicationStatusDraft {
+			return publicationservice.NewError(publicationservice.ErrorInvalidLifecycleState, errors.New("publication is no longer a draft"))
+		}
+		if current.Revision != expectedRevision {
+			return commands.handler.publicationRevisionConflict(txCtx, tx, current, expectedRevision)
+		}
+		if _, updateErr := commands.updateTx(txCtx, tx, userID, prepared); updateErr != nil {
+			return updateErr
+		}
 		var queueErr error
 		queued, queueErr = commands.handler.queueScheduledPublicationTx(txCtx, tx, publicationID, expectedRevision+1, providerreadiness.ExecutionIntentProduction)
 		return queueErr
 	})
-	if err == nil { commands.handler.captureActivationEvent(ctx, userID, prepared.existing.WorkspaceID, queued) }
+	if err == nil {
+		commands.handler.captureActivationEvent(ctx, userID, prepared.existing.WorkspaceID, queued)
+	}
 	return queued, err
 }
 

@@ -202,7 +202,7 @@ func TestCallbackAuditIsBoundedAndRedacted(t *testing.T) {
 	})
 	require.NoError(t, err)
 	_, err = service.ApplyCallback(ctx, AgentCallback{
-		RunID: run.ID, Status: string(RunSucceeded), Summary: "token=hidden-value", 
+		RunID: run.ID, Status: string(RunSucceeded), Summary: "token=hidden-value",
 	})
 	require.NoError(t, err)
 	view, err := service.GetConversation(ctx, conversation.ID)

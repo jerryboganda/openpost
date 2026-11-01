@@ -18,7 +18,10 @@ import test from "node:test";
 import { load } from "js-yaml";
 
 import { planCI } from "./ci-plan.mjs";
-import { selectPublishedStableRelease, selectReachableStableTag } from "./published-release-tag.mjs";
+import {
+  selectPublishedStableRelease,
+  selectReachableStableTag,
+} from "./published-release-tag.mjs";
 import { readReleaseSurfaceManifest } from "./release-surfaces.mjs";
 
 const ci = readFileSync(".github/workflows/ci.yml", "utf8");

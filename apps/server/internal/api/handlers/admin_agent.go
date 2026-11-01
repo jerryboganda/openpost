@@ -18,8 +18,8 @@ import (
 	"github.com/openpost/backend/internal/api/middleware"
 	"github.com/openpost/backend/internal/models"
 	"github.com/openpost/backend/internal/services/adminagent"
-	"github.com/openpost/backend/internal/services/workspaceaccess"
 	"github.com/openpost/backend/internal/services/workflows"
+	"github.com/openpost/backend/internal/services/workspaceaccess"
 	"github.com/uptrace/bun"
 )
 
@@ -52,12 +52,14 @@ type AdminAgentHandler struct {
 	db             *bun.DB
 	auth           middleware.Authenticator
 	callbackSecret string
-	workflows       *workflows.Service
-	publications    *PublicationHandler
+	workflows      *workflows.Service
+	publications   *PublicationHandler
 }
 
 func (h *AdminAgentHandler) SetWorkflowService(service *workflows.Service) { h.workflows = service }
-func (h *AdminAgentHandler) SetPublicationHandler(handler *PublicationHandler) { h.publications = handler }
+func (h *AdminAgentHandler) SetPublicationHandler(handler *PublicationHandler) {
+	h.publications = handler
+}
 
 type AdminAgentConversationResponse struct {
 	ID          string                    `json:"id"`

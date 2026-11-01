@@ -157,7 +157,9 @@ test("atomically mirrors the complete artifact and removes stale files", async (
   ];
   const files = (await readdir(destination, { recursive: true, withFileTypes: true }))
     .filter((entry) => entry.isFile())
-    .map((entry) => path.relative(destination, path.join(entry.parentPath, entry.name)).split(path.sep).join("/"))
+    .map((entry) =>
+      path.relative(destination, path.join(entry.parentPath, entry.name)).split(path.sep).join("/"),
+    )
     .sort();
   assert.deepEqual(files, paths);
   for (const file of paths) {
