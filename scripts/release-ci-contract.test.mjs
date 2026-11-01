@@ -18,7 +18,7 @@ import test from "node:test";
 import { load } from "js-yaml";
 
 import { planCI } from "./ci-plan.mjs";
-import { selectPublishedStableRelease } from "./published-release-tag.mjs";
+import { selectPublishedStableRelease, selectReachableStableTag } from "./published-release-tag.mjs";
 import { readReleaseSurfaceManifest } from "./release-surfaces.mjs";
 
 const ci = readFileSync(".github/workflows/ci.yml", "utf8");
@@ -910,4 +910,11 @@ if (args[0] === 'pr' && args[1] === 'list' && process.env.REVIEW_EXISTS === '1')
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("forks without GitHub releases baseline on the newest reachable stable tag", () => {
+  const tags = ["v7.10.0-rc.1", "v7.9.0", "v7.8.8", ""];
+  assert.equal(selectReachableStableTag(tags), "v7.9.0");
+  assert.equal(selectReachableStableTag(tags, "v7.9.0"), "v7.8.8");
+  assert.equal(selectReachableStableTag(["", "latest"]), undefined);
 });

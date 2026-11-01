@@ -17,6 +17,28 @@ export function selectPublishedStableRelease(releasePages, excludeTag) {
     .sort((left, right) => right.published_at.localeCompare(left.published_at))[0]?.tag_name;
 }
 
+// Forks publish no GitHub releases, so the release baseline falls back to the
+// newest stable version tag reachable from HEAD.
+export function selectReachableStableTag(tagLines, excludeTag) {
+  return tagLines
+    .map((line) => line.trim())
+    .find((tag) => /^v\d+\.\d+\.\d+$/u.test(tag) && tag !== excludeTag);
+}
+
+function reachableStableTag(excludeTag) {
+  const result = Bun.spawnSync([
+    "git",
+    "tag",
+    "--merged",
+    "HEAD",
+    "--list",
+    "v[0-9]*",
+    "--sort=-v:refname",
+  ]);
+  if (result.exitCode !== 0) return undefined;
+  return selectReachableStableTag(result.stdout.toString().split("\n"), excludeTag);
+}
+
 export function publishedStableReleaseTag({ excludeTag } = {}) {
   const result = Bun.spawnSync([
     "gh",
@@ -28,7 +50,9 @@ export function publishedStableReleaseTag({ excludeTag } = {}) {
   if (result.exitCode !== 0) {
     throw new Error(`could not list GitHub releases: ${result.stderr.toString().trim()}`);
   }
-  const tag = selectPublishedStableRelease(JSON.parse(result.stdout.toString()), excludeTag);
+  const tag =
+    selectPublishedStableRelease(JSON.parse(result.stdout.toString()), excludeTag) ??
+    reachableStableTag(excludeTag);
   if (!tag) throw new Error("no published stable GitHub release found");
   return tag;
 }
