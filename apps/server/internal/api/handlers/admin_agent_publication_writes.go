@@ -142,10 +142,8 @@ func (h *AdminAgentHandler) writePublication(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, "unsupported or cross-Workspace publication draft")
 		}
 		create.WorkspaceID = workspaceID
-	} else {
-		if decoder.Decode(&update) != nil || update.ExpectedRevision < 1 || update.ScheduledAt != nil || update.ClearSchedule || update.RandomDelayMinutes != nil || update.InheritRandomDelay || update.RepostOverride != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, "unsupported publication draft update")
-		}
+	} else if decoder.Decode(&update) != nil || update.ExpectedRevision < 1 || update.ScheduledAt != nil || update.ClearSchedule || update.RandomDelayMinutes != nil || update.InheritRandomDelay || update.RepostOverride != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "unsupported publication draft update")
 	}
 	// A draft-only action cannot set provider settings or media that require account-specific readiness.
 	var renditions []publications.RenditionInput
@@ -198,11 +196,12 @@ func (h *AdminAgentHandler) writePublication(c echo.Context) error {
 		saved, saveErr = h.publications.publicationApplication().Create(ctx, actor, create)
 	} else {
 		current, loadErr := h.publications.publicationApplication().Get(ctx, actor, c.Param("id"))
-		if loadErr != nil {
+		switch {
+		case loadErr != nil:
 			saveErr = loadErr
-		} else if current.WorkspaceID != workspaceID || current.Status != "draft" || current.ScheduledAt != "" {
+		case current.WorkspaceID != workspaceID || current.Status != "draft" || current.ScheduledAt != "":
 			saveErr = echo.NewHTTPError(http.StatusConflict, "only an unscheduled draft can be edited")
-		} else {
+		default:
 			saveErr = h.publications.publicationApplication().Update(ctx, actor, c.Param("id"), update)
 			if saveErr == nil {
 				saved, saveErr = h.publications.publicationApplication().Get(ctx, actor, c.Param("id"))

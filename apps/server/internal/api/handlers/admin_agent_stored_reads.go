@@ -61,7 +61,7 @@ func (h *AdminAgentHandler) readAnalytics(c echo.Context) error {
 	if len(accountIDs) > 0 {
 		var accounts []models.SocialAccount
 		if err := h.db.NewSelect().Model(&accounts).Column("id", "is_active").
-			Where("workspace_id = ? AND id IN (?)", workspaceID, bun.In(accountIDs)).Scan(ctx); err != nil {
+			Where("workspace_id = ? AND id IN (?)", workspaceID, bun.List(accountIDs)).Scan(ctx); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "analytics accounts unavailable")
 		}
 		for _, account := range accounts {
@@ -158,7 +158,7 @@ func agentLimitWorkflowSteps(steps []agentWorkflowStep, remaining *int, truncate
 			*truncated = true
 			break
 		}
-		*remaining = *remaining - 1
+		*remaining--
 		step.Name = truncateAgentField(step.Name)
 		step.Then = agentLimitWorkflowSteps(step.Then, remaining, truncated, depth+1)
 		step.Else = agentLimitWorkflowSteps(step.Else, remaining, truncated, depth+1)

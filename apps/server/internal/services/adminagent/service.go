@@ -335,7 +335,7 @@ func (s *Service) EnginesWithCredentials(ctx context.Context) ([]EngineStatus, e
 			ColumnExpr("e.event_key, e.created_at").
 			Join("JOIN admin_agent_runs AS r ON r.id = e.run_id").
 			Where("r.engine = ? AND e.kind = ?", status.ID, "credential").
-			Where("e.event_key IN (?)", bun.In([]string{"credentials-present", "credentials-missing"})).
+			Where("e.event_key IN (?)", bun.List([]string{"credentials-present", "credentials-missing"})).
 			OrderExpr("e.created_at DESC, e.seq DESC").Limit(1).Scan(ctx, &check)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("read %s credential check: %w", status.ID, err)
@@ -759,7 +759,7 @@ func (s *Service) launchDispatch(ctx context.Context, run *AgentRun, engine Engi
 		}
 		return s.loadAgentRun(ctx, run.ID)
 	}
-	s.appendEvent(ctx, run.ID, "dispatch", "dispatch", "Dispatched to GitHub Actions")
+	_ = s.appendEvent(ctx, run.ID, "dispatch", "dispatch", "Dispatched to GitHub Actions")
 	return run, nil
 }
 
@@ -884,7 +884,7 @@ func (s *Service) ApplyCallback(ctx context.Context, callback AgentCallback) (*A
 		run.GitHubRunID = *callback.GitHubRunID
 	}
 	if RunStatus(run.Status) == RunCanceled {
-		s.appendEvent(ctx, run.ID, "late-result", "error",
+		_ = s.appendEvent(ctx, run.ID, "late-result", "error",
 			"The engine reported a result after the run was canceled")
 		return run, nil
 	}
@@ -903,7 +903,7 @@ func (s *Service) ApplyCallback(ctx context.Context, callback AgentCallback) (*A
 			return nil, err
 		}
 		if RunStatus(current.Status) == RunCanceled {
-			s.appendEvent(ctx, current.ID, "late-result", "error",
+			_ = s.appendEvent(ctx, current.ID, "late-result", "error",
 				"The engine reported a result after the run was canceled")
 		}
 		return current, nil
@@ -979,7 +979,8 @@ func applyAgentCallbackFields(run *AgentRun, status RunStatus, callback AgentCal
 	if revision := strings.TrimSpace(callback.BaseRevision); revision != "" {
 		run.BaseRevision = revision
 	}
-	if status == RunFailed {
+	switch status {
+	case RunFailed:
 		run.FailureCode = safeAuditText(callback.FailureCode)
 		// Only startup reconciliation may set the recoverable interrupted marker.
 		if run.FailureCode == "" || run.FailureCode == "interrupted" {
@@ -989,7 +990,7 @@ func applyAgentCallbackFields(run *AgentRun, status RunStatus, callback AgentCal
 		if run.FailureMessage == "" {
 			run.FailureMessage = "The engine reported a failure"
 		}
-	} else if status == RunSucceeded {
+	case RunSucceeded:
 		run.FailureCode = ""
 		run.FailureMessage = ""
 	}
@@ -1079,7 +1080,7 @@ func (s *Service) GetRunContext(ctx context.Context, runID string) (*AgentRunCon
 	previous := make([]AgentMessage, 0)
 	if err := s.db.NewSelect().Model(&previous).
 		Where("conversation_id = ? AND created_at < ?", run.ConversationID, run.CreatedAt).
-		Where("role IN (?)", bun.In([]string{"user", "assistant"})).
+		Where("role IN (?)", bun.List([]string{"user", "assistant"})).
 		OrderExpr("created_at DESC, id DESC").
 		Limit(maxContextHistoryMessages).
 		Scan(ctx); err != nil {

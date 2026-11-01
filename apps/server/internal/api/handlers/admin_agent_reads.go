@@ -94,7 +94,7 @@ func (h *AdminAgentHandler) readSchedules(c echo.Context) error {
 	var posts []models.Publication
 	query := h.db.NewSelect().Model(&posts).
 		Column("id", "title", "status", "scheduled_at", "actual_run_at", "created_at").
-		Where("workspace_id = ? AND scheduled_at IS NOT NULL AND status IN (?)", workspaceID, bun.In([]string{models.PublicationStatusReady, models.PublicationStatusScheduled, models.PublicationStatusPublishing})).
+		Where("workspace_id = ? AND scheduled_at IS NOT NULL AND status IN (?)", workspaceID, bun.List([]string{models.PublicationStatusReady, models.PublicationStatusScheduled, models.PublicationStatusPublishing})).
 		OrderExpr("scheduled_at ASC, id ASC").Limit(agentReadPageSize + 1)
 	if cursor != nil {
 		query = query.Where("(scheduled_at > ? OR (scheduled_at = ? AND id > ?))", cursor.Timestamp, cursor.Timestamp, cursor.ID)
