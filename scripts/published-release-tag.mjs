@@ -18,11 +18,18 @@ export function selectPublishedStableRelease(releasePages, excludeTag) {
 }
 
 // Forks publish no GitHub releases, so the release baseline falls back to the
-// newest stable version tag reachable from HEAD.
+// newest stable version tag reachable from HEAD, then to the root commit so
+// every distribution is planned as changed.
 export function selectReachableStableTag(tagLines, excludeTag) {
   return tagLines
     .map((line) => line.trim())
     .find((tag) => /^v\d+\.\d+\.\d+$/u.test(tag) && tag !== excludeTag);
+}
+
+function rootCommit() {
+  const result = Bun.spawnSync(["git", "rev-list", "--max-parents=0", "HEAD"]);
+  if (result.exitCode !== 0) return undefined;
+  return result.stdout.toString().split("\n")[0]?.trim() || undefined;
 }
 
 function reachableStableTag(excludeTag) {
@@ -52,7 +59,8 @@ export function publishedStableReleaseTag({ excludeTag } = {}) {
   }
   const tag =
     selectPublishedStableRelease(JSON.parse(result.stdout.toString()), excludeTag) ??
-    reachableStableTag(excludeTag);
+    reachableStableTag(excludeTag) ??
+    rootCommit();
   if (!tag) throw new Error("no published stable GitHub release found");
   return tag;
 }
