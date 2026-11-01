@@ -189,7 +189,7 @@ func TestCallbackAuditIsBoundedAndRedacted(t *testing.T) {
 	service := NewService(adminAgentTestDB(t), &fakeDispatcher{})
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineCodex)
 	require.NoError(t, err)
-	run, err := startRun(ctx, service, conversation.ID, "Inspect actions"))
+	run, err := startRun(ctx, service, conversation.ID, "Inspect actions")
 	require.NoError(t, err)
 	_, err = service.ApplyCallback(ctx, AgentCallback{
 		RunID: run.ID, Status: string(RunRunning),
@@ -247,7 +247,7 @@ func TestRunContextIsBoundedAndConversationScoped(t *testing.T) {
 	}).Exec(ctx)
 	require.NoError(t, err)
 
-	run, err := startRun(ctx, service, conversation.ID, "Current instruction"))
+	run, err := startRun(ctx, service, conversation.ID, "Current instruction")
 	require.NoError(t, err)
 	_, err = db.NewInsert().Model(&AgentMessage{
 		ID: "future-message", ConversationID: conversation.ID, Role: "assistant",
@@ -320,7 +320,7 @@ func TestEngineCredentialReportsAreDurableAndEngineScoped(t *testing.T) {
 	}
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineCodex)
 	require.NoError(t, err)
-	run, err := startRun(ctx, service, conversation.ID, "Inspect the code"))
+	run, err := startRun(ctx, service, conversation.ID, "Inspect the code")
 	require.NoError(t, err)
 	_, err = service.ApplyCallback(ctx, AgentCallback{RunID: run.ID, Status: string(RunRunning),
 		Events: []CallbackEvent{{Key: "credentials-present", Kind: "credential", AgentMessage: "Credential was present."}}})
@@ -351,7 +351,7 @@ func TestLateCredentialFailureRefinesGitHubRecovery(t *testing.T) {
 	}})
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineClaude)
 	require.NoError(t, err)
-	run, err := startRun(ctx, service, conversation.ID, "Inspect."))
+	run, err := startRun(ctx, service, conversation.ID, "Inspect.")
 	require.NoError(t, err)
 	_, err = service.ReconcileInterrupted(ctx)
 	require.NoError(t, err)
@@ -375,7 +375,7 @@ func TestDispatchDoesNotDowngradeEarlyTerminalCallback(t *testing.T) {
 	}
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineOpenCode)
 	require.NoError(t, err)
-	run, err := startRun(ctx, service, conversation.ID, "Inspect the code."))
+	run, err := startRun(ctx, service, conversation.ID, "Inspect the code.")
 	require.NoError(t, err)
 	require.NoError(t, callbackErr)
 	require.Equal(t, string(RunSucceeded), run.Status)
@@ -390,7 +390,7 @@ func TestGitHubRunIDIsBoundToOneAgentRunAndCancellationWaits(t *testing.T) {
 	service := NewService(adminAgentTestDB(t), dispatcher)
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineOpenCode)
 	require.NoError(t, err)
-	run, err := startRun(ctx, service, conversation.ID, "Do work."))
+	run, err := startRun(ctx, service, conversation.ID, "Do work.")
 	require.NoError(t, err)
 
 	_, err = service.CancelRun(ctx, run.ID)
@@ -425,7 +425,7 @@ func TestGitHubRunIDIsBoundToOneAgentRunAndCancellationWaits(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidCallback)
 	otherConversation, err := service.CreateConversation(ctx, "admin", "", "", EngineCodex)
 	require.NoError(t, err)
-	otherRun, err := startRun(ctx, service, otherConversation.ID, "Other task."))
+	otherRun, err := startRun(ctx, service, otherConversation.ID, "Other task.")
 	require.NoError(t, err)
 	_, err = service.ApplyCallback(ctx, AgentCallback{RunID: otherRun.ID, GitHubRunID: &githubID, Status: string(RunRunning)})
 	require.ErrorIs(t, err, ErrInvalidCallback, "one GitHub Actions run must not bind to two AgentRuns")
@@ -448,7 +448,7 @@ func TestGitHubRunIDValidationAndLateBinding(t *testing.T) {
 	service := NewService(adminAgentTestDB(t), &fakeDispatcher{})
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineClaude)
 	require.NoError(t, err)
-	run, err := startRun(ctx, service, conversation.ID, "Inspect."))
+	run, err := startRun(ctx, service, conversation.ID, "Inspect.")
 	require.NoError(t, err)
 	zero := int64(0)
 	_, err = service.ApplyCallback(ctx, AgentCallback{RunID: run.ID, GitHubRunID: &zero, Status: string(RunRunning)})
@@ -497,7 +497,7 @@ func TestCancelDoesNotOverwriteCallbackDuringDispatchCancellation(t *testing.T) 
 	service := NewService(adminAgentTestDB(t), dispatcher)
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineOpenCode)
 	require.NoError(t, err)
-	run, err := startRun(ctx, service, conversation.ID, "Check the branch."))
+	run, err := startRun(ctx, service, conversation.ID, "Check the branch.")
 	require.NoError(t, err)
 	githubID := int64(12345)
 	_, err = service.ApplyCallback(ctx, AgentCallback{RunID: run.ID, Status: string(RunRunning), GitHubRunID: &githubID})
@@ -521,7 +521,7 @@ func TestCallbackDoesNotOverwriteCancellationBetweenReadAndWrite(t *testing.T) {
 	service := NewService(adminAgentTestDB(t), &fakeDispatcher{})
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineOpenCode)
 	require.NoError(t, err)
-	run, err := startRun(ctx, service, conversation.ID, "Check the branch."))
+	run, err := startRun(ctx, service, conversation.ID, "Check the branch.")
 	require.NoError(t, err)
 	githubID := int64(12345)
 	_, err = service.ApplyCallback(ctx, AgentCallback{RunID: run.ID, Status: string(RunRunning), GitHubRunID: &githubID})
@@ -588,7 +588,7 @@ func TestCallbackDoesNotOverwriteAnotherCallbackBetweenReadAndWrite(t *testing.T
 	service := NewService(adminAgentTestDB(t), &fakeDispatcher{})
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineOpenCode)
 	require.NoError(t, err)
-	run, err := startRun(ctx, service, conversation.ID, "Check the branch."))
+	run, err := startRun(ctx, service, conversation.ID, "Check the branch.")
 	require.NoError(t, err)
 	var winnerErr error
 	completed := false
@@ -687,14 +687,14 @@ func TestReconcileGitHubActiveAndCompletedRuns(t *testing.T) {
 	service := NewService(db, dispatcher)
 	activeConversation, err := service.CreateConversation(ctx, "admin", "", "", EngineCodex)
 	require.NoError(t, err)
-	active, err := startRun(ctx, service, activeConversation.ID, "Keep coding."))
+	active, err := startRun(ctx, service, activeConversation.ID, "Keep coding.")
 	require.NoError(t, err)
 	activeID := int64(321)
 	_, err = service.ApplyCallback(ctx, AgentCallback{RunID: active.ID, GitHubRunID: &activeID, Status: string(RunRunning)})
 	require.NoError(t, err)
 	completedConversation, err := service.CreateConversation(ctx, "admin", "", "", EngineClaude)
 	require.NoError(t, err)
-	completed, err := startRun(ctx, service, completedConversation.ID, "Complete the task."))
+	completed, err := startRun(ctx, service, completedConversation.ID, "Complete the task.")
 	require.NoError(t, err)
 	dispatcher.lookup = func(run AgentRun) (GitHubRunState, error) {
 		if run.ID == active.ID {
@@ -744,7 +744,7 @@ func TestReconcileGitHubConclusions(t *testing.T) {
 			service := NewService(adminAgentTestDB(t), dispatcher)
 			conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineOpenCode)
 			require.NoError(t, err)
-			run, err := startRun(ctx, service, conversation.ID, "Inspect."))
+			run, err := startRun(ctx, service, conversation.ID, "Inspect.")
 			require.NoError(t, err)
 			count, err := service.ReconcileInterrupted(ctx)
 			require.NoError(t, err)
@@ -767,7 +767,7 @@ func TestReconcileGitHubLookupFailureDoesNotChangeRunStatus(t *testing.T) {
 	service := NewService(adminAgentTestDB(t), dispatcher)
 	conversation, err := service.CreateConversation(ctx, "admin", "", "", EngineCodex)
 	require.NoError(t, err)
-	run, err := startRun(ctx, service, conversation.ID, "Do work."))
+	run, err := startRun(ctx, service, conversation.ID, "Do work.")
 	require.NoError(t, err)
 	count, err := service.ReconcileInterrupted(ctx)
 	require.ErrorIs(t, err, context.DeadlineExceeded)

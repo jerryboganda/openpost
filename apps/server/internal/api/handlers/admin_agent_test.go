@@ -203,7 +203,7 @@ func TestAdminAgentAuthorizationAndConversationFlow(t *testing.T) {
 		decodeAgentBody(t, started, &startedBody)
 		require.Equal(t, "dispatched", startedBody.AgentRun.Status)
 	duplicate := requestAgent(t, e, http.MethodPost,
-		"/api/v1/admin/agent/conversations/"+createdBody.AgentConversation.ID+"/messages",
+		"/api/v1/admin/agent/conversations/"+conversationID+"/messages",
 		map[string]string{"prompt": "Start another run."})
 	require.Equal(t, http.StatusConflict, duplicate.Code, duplicate.Body.String())
 	require.Len(t, dispatcher.dispatched, 1)
