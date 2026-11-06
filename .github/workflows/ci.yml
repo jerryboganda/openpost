@@ -25,6 +25,9 @@ env:
 jobs:
   plan:
     name: Plan affected surfaces
+    # The fork deploys through fork-release.yml; don't compete with that build
+    # by starting the upstream release matrix on every fork main push.
+    if: github.repository == 'getopenpost/openpost' || github.event_name != 'push' || github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -1418,7 +1421,7 @@ jobs:
 
   release-candidate:
     name: Release Candidate
-    if: always()
+    if: always() && needs.plan.result != 'skipped'
     needs:
       [
         plan,
